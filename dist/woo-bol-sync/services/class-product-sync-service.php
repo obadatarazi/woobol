@@ -1197,6 +1197,13 @@ class Product_Sync_Service {
         }
 
         if ( $product->is_type( 'variation' ) ) {
+            $variation_gallery = $this->get_variation_gallery_image_ids( $product );
+            if ( $variation_gallery !== [] ) {
+                return $variation_gallery;
+            }
+            if ( (int) $product->get_image_id() > 0 ) {
+                return [];
+            }
             $parent = wc_get_product( $product->get_parent_id() );
             if ( $parent instanceof \WC_Product ) {
                 $parent_gallery = $parent->get_gallery_image_ids();
@@ -1207,6 +1214,61 @@ class Product_Sync_Service {
         }
 
         return [];
+    }
+
+    /**
+     * Read gallery images from common variation-gallery plugin meta keys.
+     *
+     * @return int[]
+     */
+    private function get_variation_gallery_image_ids( \WC_Product $product ): array {
+        $keys = [
+            'variation_image_gallery',
+            '_variation_image_gallery',
+            'woo_variation_gallery_images',
+            '_woo_variation_gallery_images',
+            'wc_additional_variation_images',
+            '_wc_additional_variation_images',
+            '_product_image_gallery',
+        ];
+
+        $ids = [];
+        foreach ( $keys as $key ) {
+            $raw = $product->get_meta( $key, true );
+            $ids = array_merge( $ids, $this->normalize_gallery_meta_ids( $raw ) );
+        }
+
+        return array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
+    }
+
+    /**
+     * @param mixed $raw
+     * @return int[]
+     */
+    private function normalize_gallery_meta_ids( $raw ): array {
+        if ( is_array( $raw ) ) {
+            $ids = [];
+            foreach ( $raw as $value ) {
+                $ids = array_merge( $ids, $this->normalize_gallery_meta_ids( $value ) );
+            }
+            return $ids;
+        }
+
+        if ( is_numeric( $raw ) ) {
+            return [ (int) $raw ];
+        }
+
+        if ( ! is_string( $raw ) || trim( $raw ) === '' ) {
+            return [];
+        }
+
+        $raw = trim( $raw );
+        $decoded = json_decode( $raw, true );
+        if ( is_array( $decoded ) ) {
+            return $this->normalize_gallery_meta_ids( $decoded );
+        }
+
+        return array_map( 'intval', preg_split( '/[^0-9]+/', $raw, -1, PREG_SPLIT_NO_EMPTY ) ?: [] );
     }
 
     /**

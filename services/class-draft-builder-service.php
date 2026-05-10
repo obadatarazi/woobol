@@ -236,8 +236,25 @@ class Draft_Builder_Service {
         $parent_description       = (string) $parent_product->get_description();
         $parent_main_image_url    = $this->resolve_image_url( (int) $parent_product->get_image_id() );
         $parent_gallery           = $this->collect_gallery( $parent_product );
+        $variation_gallery        = $this->collect_gallery( $variation );
         $parent_categories        = $this->collect_terms( (int) $parent_product->get_id(), 'product_cat' );
         $parent_tags              = $this->collect_terms( (int) $parent_product->get_id(), 'product_tag' );
+
+        $variation_image_id  = (int) $variation->get_image_id();
+        $variation_image_url = $this->resolve_image_url( $variation_image_id );
+        $content_gallery      = [];
+
+        if ( $variation_image_url !== '' || $variation_gallery !== [] ) {
+            if ( $variation_image_url === '' && $variation_gallery !== [] ) {
+                $variation_image_url = (string) ( $variation_gallery[0]['url'] ?? '' );
+                $variation_image_id  = (int) ( $variation_gallery[0]['id'] ?? 0 );
+            }
+            $content_gallery = $variation_gallery;
+        } else {
+            $variation_image_url = $parent_main_image_url;
+            $variation_image_id  = (int) $parent_product->get_image_id();
+            $content_gallery     = $parent_gallery;
+        }
 
         $mapped_payload = $this->build_variation_mapped_payload(
             $variation,
@@ -247,20 +264,11 @@ class Draft_Builder_Service {
             $parent_name,
             $parent_short_description,
             $parent_description,
-            $parent_main_image_url,
-            $parent_gallery,
+            $variation_image_url,
+            $content_gallery,
             $parent_categories,
             $parent_tags
         );
-
-        $variation_image_id  = (int) $variation->get_image_id();
-        $variation_image_url = $this->resolve_image_url( $variation_image_id );
-        
-        // Use variation image if available, otherwise fall back to parent image
-        if ( $variation_image_url === '' ) {
-            $variation_image_url = $parent_main_image_url;
-            $variation_image_id  = (int) $parent_product->get_image_id();
-        }
 
         // Get stock quantity - handle both managed and unmanaged stock
         $stock_qty = $variation->get_stock_quantity();
@@ -352,8 +360,8 @@ class Draft_Builder_Service {
         string $parent_name,
         string $parent_short_description,
         string $parent_description,
-        string $parent_main_image_url,
-        array $parent_gallery,
+        string $resolved_main_image_url,
+        array $content_gallery,
         array $parent_categories,
         array $parent_tags
     ): array {
@@ -362,12 +370,6 @@ class Draft_Builder_Service {
         $variation_name = $parent_name;
         if ( $attributes !== [] ) {
             $variation_name .= ' - ' . implode( ' / ', array_values( $attributes ) );
-        }
-
-        // Image: Use variation's image if set, otherwise use parent's image
-        $variation_image_url = $this->resolve_image_url( (int) $variation->get_image_id() );
-        if ( $variation_image_url === '' ) {
-            $variation_image_url = $parent_main_image_url;
         }
 
         // Stock: Always from variation (handle both managed and unmanaged stock)
@@ -397,9 +399,9 @@ class Draft_Builder_Service {
             'manage_stock'       => $variation->get_manage_stock(),
             
             // Images - FROM VARIATION (with parent fallback)
-            'image_url'          => $variation_image_url,                   // Variation or parent image
-            'main_image_url'     => $variation_image_url,
-            'gallery'            => $parent_gallery,                        // Parent gallery
+            'image_url'          => $resolved_main_image_url,               // Variation image set, or parent fallback
+            'main_image_url'     => $resolved_main_image_url,
+            'gallery'            => $content_gallery,                       // Variation gallery, or parent fallback
             
             // Content/SEO - ALWAYS FROM PARENT
             'short_description'  => $parent_short_description,              // Parent description
@@ -415,6 +417,9 @@ class Draft_Builder_Service {
     private function collect_gallery( \WC_Product $product ): array {
         $out = [];
         $ids = $product->get_gallery_image_ids();
+        if ( ( ! is_array( $ids ) || $ids === [] ) && $product->is_type( 'variation' ) ) {
+            $ids = $this->get_variation_gallery_image_ids( $product );
+        }
         if ( ! is_array( $ids ) ) {
             return $out;
         }
@@ -434,6 +439,61 @@ class Draft_Builder_Service {
             ];
         }
         return $out;
+    }
+
+    /**
+     * Read gallery images from common variation-gallery plugin meta keys.
+     *
+     * @return int[]
+     */
+    private function get_variation_gallery_image_ids( \WC_Product $product ): array {
+        $keys = [
+            'variation_image_gallery',
+            '_variation_image_gallery',
+            'woo_variation_gallery_images',
+            '_woo_variation_gallery_images',
+            'wc_additional_variation_images',
+            '_wc_additional_variation_images',
+            '_product_image_gallery',
+        ];
+
+        $ids = [];
+        foreach ( $keys as $key ) {
+            $raw = $product->get_meta( $key, true );
+            $ids = array_merge( $ids, $this->normalize_gallery_meta_ids( $raw ) );
+        }
+
+        return array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
+    }
+
+    /**
+     * @param mixed $raw
+     * @return int[]
+     */
+    private function normalize_gallery_meta_ids( $raw ): array {
+        if ( is_array( $raw ) ) {
+            $ids = [];
+            foreach ( $raw as $value ) {
+                $ids = array_merge( $ids, $this->normalize_gallery_meta_ids( $value ) );
+            }
+            return $ids;
+        }
+
+        if ( is_numeric( $raw ) ) {
+            return [ (int) $raw ];
+        }
+
+        if ( ! is_string( $raw ) || trim( $raw ) === '' ) {
+            return [];
+        }
+
+        $raw = trim( $raw );
+        $decoded = json_decode( $raw, true );
+        if ( is_array( $decoded ) ) {
+            return $this->normalize_gallery_meta_ids( $decoded );
+        }
+
+        return array_map( 'intval', preg_split( '/[^0-9]+/', $raw, -1, PREG_SPLIT_NO_EMPTY ) ?: [] );
     }
 
     /**

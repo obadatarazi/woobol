@@ -3,7 +3,7 @@
  * Plugin Name:       WooBolSync
  * Plugin URI:        https://cupcoding.com/woo-bol-sync
  * Description:       Production-grade WooCommerce ↔ bol.com integration: product sync, order sync, stock and order-status sync, DB logging, signed webhooks, and rate-limit handling.
- * Version:           3.0.26
+ * Version:           3.0.28
  * Author:            Obada Al-Tarazi
  * Author URI:        https://cupcoding.com
  * License:           Proprietary
@@ -26,7 +26,7 @@ if ( defined( 'WBS_PLUGIN_FILE' ) || function_exists( 'woo_bol_sync' ) || class_
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-define( 'WBS_VERSION',      '3.0.26' );
+define( 'WBS_VERSION',      '3.0.28' );
 define( 'WBS_MIN_PHP',      '8.2' );
 define( 'WBS_MIN_WP',       '6.2' );
 define( 'WBS_MIN_WC',       '8.0' );
