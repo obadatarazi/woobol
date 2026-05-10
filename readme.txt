@@ -4,7 +4,7 @@ Tags: woocommerce, bol.com, sync, integration, marketplace
 Requires at least: 6.2
 Tested up to: 6.7
 Requires PHP: 8.2
-Stable tag: 3.0.24
+Stable tag: 3.0.26
 License: Proprietary
 
 Production-grade WooCommerce ↔ bol.com integration: product sync, order import, signed webhooks, configurable schedules, and DB-backed logging.

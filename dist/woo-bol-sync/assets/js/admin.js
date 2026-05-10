@@ -183,6 +183,18 @@
             .slideDown( 200 );
     }
 
+    function debounce( fn, wait ) {
+        var timeoutId = null;
+        return function () {
+            var context = this;
+            var args = arguments;
+            window.clearTimeout( timeoutId );
+            timeoutId = window.setTimeout( function () {
+                fn.apply( context, args );
+            }, wait );
+        };
+    }
+
     function escapeHtml( text ) {
         return $( '<div>' ).text( text || '' ).html();
     }
@@ -348,7 +360,7 @@
                 resetButton( $btn );
                 var type = response.success ? 'success' : 'error';
                 showMessage( $msg, escapeHtml( response.data.message || wbsAdmin.i18n.error ), type );
-                if ( response.success && response.data && ( action === 'wbs_sync_products' || action === 'wbs_retry_failed_products' || action === 'wbs_force_update_existing_products' ) ) {
+                if ( response.success && response.data && ( action === 'wbs_sync_products' || action === 'wbs_retry_failed_products' || action === 'wbs_force_update_existing_products' || action === 'wbs_sync_selected_product' ) ) {
                     updateProductSyncUi( response.data );
                 }
                 if ( response.success ) {
@@ -557,8 +569,132 @@
 
     // ── Sync Products ─────────────────────────────────────────────────────────
 
+    function renderDirectSyncResults( items ) {
+        var $results = $( '#wbs-direct-sync-results' );
+        if ( ! $results.length ) {
+            return;
+        }
+
+        if ( ! items || ! items.length ) {
+            $results.html( '<div class="wbs-direct-sync-results__empty">' + escapeHtml( wbsAdmin.i18n.searchProductsEmpty || 'No matching products found.' ) + '</div>' ).prop( 'hidden', false );
+            return;
+        }
+
+        var html = '';
+        $.each( items, function ( _, item ) {
+            html += '<button type="button" class="wbs-direct-sync-result" data-product-id="' + escapeAttr( String( item.id || '' ) ) + '" data-product-label="' + escapeAttr( String( item.label || '' ) ) + '">';
+            html += '<span class="wbs-direct-sync-result__title">' + escapeHtml( item.label || '' ) + '</span>';
+            html += '</button>';
+        } );
+
+        $results.html( html ).prop( 'hidden', false );
+    }
+
+    function setDirectSyncSelection( item ) {
+        var label = item && item.label ? String( item.label ) : '';
+        var id = item && item.id ? String( item.id ) : '';
+        $( '#wbs-direct-sync-product' ).val( id );
+        $( '#wbs-direct-sync-search' ).val( label );
+        $( '#wbs-direct-sync-selected-label' ).text( label );
+        $( '#wbs-direct-sync-selected' ).prop( 'hidden', ! id );
+        $( '#wbs-direct-sync-results' ).prop( 'hidden', true ).empty();
+    }
+
+    function clearDirectSyncSelection() {
+        $( '#wbs-direct-sync-product' ).val( '' );
+        $( '#wbs-direct-sync-search' ).val( '' );
+        $( '#wbs-direct-sync-selected-label' ).text( '' );
+        $( '#wbs-direct-sync-selected' ).prop( 'hidden', true );
+        $( '#wbs-direct-sync-results' ).prop( 'hidden', true ).empty();
+    }
+
+    var runDirectSyncSearch = debounce( function () {
+        var $input = $( '#wbs-direct-sync-search' );
+        var $results = $( '#wbs-direct-sync-results' );
+        if ( ! $input.length || ! $results.length ) {
+            return;
+        }
+
+        var term = String( $input.val() || '' ).trim();
+        if ( term.length < 2 ) {
+            if ( term.length === 0 ) {
+                clearDirectSyncSelection();
+            }
+            $results.html( '<div class="wbs-direct-sync-results__hint">' + escapeHtml( wbsAdmin.i18n.searchProductsMin || 'Type at least 2 characters to search.' ) + '</div>' ).prop( 'hidden', false );
+            return;
+        }
+
+        $( '#wbs-direct-sync-product' ).val( '' );
+        $( '#wbs-direct-sync-selected' ).prop( 'hidden', true );
+        $results.html( '<div class="wbs-direct-sync-results__hint">' + escapeHtml( wbsAdmin.i18n.searchingProducts || 'Searching products…' ) + '</div>' ).prop( 'hidden', false );
+
+        $.ajax( {
+            url: wbsAdmin.ajaxUrl,
+            method: 'POST',
+            data: {
+                action: 'wbs_search_sync_products',
+                nonce: wbsAdmin.nonce,
+                term: term
+            },
+            success: function ( response ) {
+                if ( response && response.success && response.data ) {
+                    renderDirectSyncResults( response.data.items || [] );
+                    return;
+                }
+                $results.html( '<div class="wbs-direct-sync-results__empty">' + escapeHtml( wbsAdmin.i18n.error || 'An error occurred.' ) + '</div>' ).prop( 'hidden', false );
+            },
+            error: function () {
+                $results.html( '<div class="wbs-direct-sync-results__empty">' + escapeHtml( wbsAdmin.i18n.error || 'An error occurred.' ) + '</div>' ).prop( 'hidden', false );
+            }
+        } );
+    }, 250 );
+
+    $( document ).on( 'input', '#wbs-direct-sync-search', runDirectSyncSearch );
+
+    $( document ).on( 'focus', '#wbs-direct-sync-search', function () {
+        var $results = $( '#wbs-direct-sync-results' );
+        if ( ! $results.children().length ) {
+            $results.html( '<div class="wbs-direct-sync-results__hint">' + escapeHtml( wbsAdmin.i18n.searchProductsHint || 'Search by product name, SKU, EAN, or ID.' ) + '</div>' );
+        }
+        $results.prop( 'hidden', false );
+    } );
+
+    $( document ).on( 'click', '.wbs-direct-sync-result', function () {
+        setDirectSyncSelection( {
+            id: String( $( this ).data( 'product-id' ) || '' ),
+            label: String( $( this ).data( 'product-label' ) || '' )
+        } );
+    } );
+
+    $( document ).on( 'click', '#wbs-direct-sync-clear', function ( event ) {
+        event.preventDefault();
+        clearDirectSyncSelection();
+        $( '#wbs-direct-sync-search' ).trigger( 'focus' );
+    } );
+
+    $( document ).on( 'click', function ( event ) {
+        if ( ! $( event.target ).closest( '.wbs-direct-sync-picker' ).length ) {
+            $( '#wbs-direct-sync-results' ).prop( 'hidden', true );
+        }
+    } );
+
     $( document ).on( 'click', '#wbs-btn-sync-products', function () {
         runAjax( $( this ), $( '#wbs-products-message' ), 'wbs_sync_products', wbsAdmin.i18n.syncing );
+    } );
+
+    $( document ).on( 'click', '#wbs-btn-sync-selected-product', function () {
+        var productId = String( $( '#wbs-direct-sync-product' ).val() || '' ).trim();
+        if ( ! productId ) {
+            showMessage( $( '#wbs-products-message' ), escapeHtml( wbsAdmin.i18n.selectProductFirst || 'Select a product first.' ), 'error' );
+            return;
+        }
+        runAjax(
+            $( this ),
+            $( '#wbs-products-message' ),
+            'wbs_sync_selected_product',
+            wbsAdmin.i18n.syncSelectedProduct || wbsAdmin.i18n.syncing,
+            { product_id: productId }
+        );
     } );
 
     $( document ).on( 'click', '#wbs-btn-force-update-existing-products', function () {

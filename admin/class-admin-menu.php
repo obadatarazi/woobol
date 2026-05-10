@@ -423,6 +423,7 @@ class Admin_Menu {
                 'fetchingEo'    => __( 'Fetching…', 'woo-bol-sync' ),
                 'fetchEo'       => __( 'Fetch economic operator', 'woo-bol-sync' ),
                 'syncProducts'  => __( 'Sync Products', 'woo-bol-sync' ),
+                'syncSelectedProduct' => __( 'Sync selected product', 'woo-bol-sync' ),
                 'syncOrders'    => __( 'Sync Orders', 'woo-bol-sync' ),
                 'testConn'      => __( 'Test Connection', 'woo-bol-sync' ),
                 'healthCheck'   => __( 'Run health check', 'woo-bol-sync' ),
@@ -435,6 +436,13 @@ class Admin_Menu {
                 'error'         => __( 'An error occurred. Please try again.', 'woo-bol-sync' ),
                 'confirmClear'  => __( 'Are you sure you want to delete all log entries? This cannot be undone.', 'woo-bol-sync' ),
                 'confirmForceUpdate' => __( 'Force update all existing bol-linked products now? This bypasses Smart Sync and may take time.', 'woo-bol-sync' ),
+                'selectProductFirst' => __( 'Select a product or variation first.', 'woo-bol-sync' ),
+                'searchProducts' => __( 'Search products…', 'woo-bol-sync' ),
+                'searchingProducts' => __( 'Searching products…', 'woo-bol-sync' ),
+                'searchProductsHint' => __( 'Search by product name, SKU, EAN, or WooCommerce ID.', 'woo-bol-sync' ),
+                'searchProductsMin' => __( 'Type at least 2 characters to search.', 'woo-bol-sync' ),
+                'searchProductsEmpty' => __( 'No matching products or variations found.', 'woo-bol-sync' ),
+                'clearSelectedProduct' => __( 'Clear selected product', 'woo-bol-sync' ),
                 /* translators: %s: UTC datetime */
                 'lastFetched'   => __( 'Last fetched: %s', 'woo-bol-sync' ),
                 'catalogLookup'   => __( 'Look up', 'woo-bol-sync' ),
@@ -487,6 +495,8 @@ class Admin_Menu {
      */
     public function register_ajax_hooks( Hook_Loader $loader ): void {
         $loader->add_action( 'wp_ajax_wbs_sync_products',   $this, 'ajax_sync_products' );
+        $loader->add_action( 'wp_ajax_wbs_sync_selected_product', $this, 'ajax_sync_selected_product' );
+        $loader->add_action( 'wp_ajax_wbs_search_sync_products', $this, 'ajax_search_sync_products' );
         $loader->add_action( 'wp_ajax_wbs_sync_orders',     $this, 'ajax_sync_orders' );
         $loader->add_action( 'wp_ajax_wbs_test_connection', $this, 'ajax_test_connection' );
         $loader->add_action( 'wp_ajax_wbs_run_health_check', $this, 'ajax_run_health_check' );
@@ -835,6 +845,214 @@ class Admin_Menu {
             'result' => $result,
             'stats'  => self::dashboard_stats_payload(),
         ] );
+    }
+
+    /**
+     * AJAX: trigger direct sync for one selected product or variation.
+     *
+     * @return void
+     */
+    public function ajax_sync_selected_product(): void {
+        $this->verify_ajax();
+        Ajax_Runtime::prepare_long_request();
+        if ( ! Mapping_Config::product_sync_enabled() ) {
+            wp_send_json_error(
+                [ 'message' => __( 'Product sync is disabled in settings. Enable it first to run manual sync.', 'woo-bol-sync' ) ],
+                400
+            );
+        }
+
+        $product_id = isset( $_POST['product_id'] ) ? absint( wp_unslash( $_POST['product_id'] ) ) : 0;
+        if ( $product_id <= 0 ) {
+            wp_send_json_error( [ 'message' => __( 'Select a valid WooCommerce product or variation.', 'woo-bol-sync' ) ], 400 );
+        }
+
+        $product = function_exists( 'wc_get_product' ) ? wc_get_product( $product_id ) : null;
+        if ( ! $product instanceof \WC_Product ) {
+            wp_send_json_error( [ 'message' => __( 'Selected WooCommerce product was not found.', 'woo-bol-sync' ) ], 404 );
+        }
+
+        $service = new Product_Sync_Service( $this->api );
+        $result  = $service->sync_product_by_id( $product_id, true, false );
+
+        $label   = $product->get_name() !== '' ? $product->get_name() : '#' . $product_id;
+        $message = match ( $result['status'] ) {
+            'synced' => sprintf( __( 'Selected product synced: %1$s (%2$s).', 'woo-bol-sync' ), $label, $result['operation'] !== '' ? $result['operation'] : __( 'synced', 'woo-bol-sync' ) ),
+            'skipped' => sprintf( __( 'Selected product was skipped: %s.', 'woo-bol-sync' ), $label ),
+            'invalid' => sprintf( __( 'Selected product is invalid for sync: %s.', 'woo-bol-sync' ), $label ),
+            default => sprintf( __( 'Selected product sync failed: %s.', 'woo-bol-sync' ), $label ),
+        };
+
+        if ( $result['status'] === 'failed' || $result['status'] === 'invalid' ) {
+            wp_send_json_error(
+                [
+                    'message' => $message,
+                    'result'  => $result,
+                    'stats'   => self::dashboard_stats_payload(),
+                ]
+            );
+        }
+
+        wp_send_json_success( [
+            'message' => $message,
+            'result'  => [
+                'synced'        => $result['status'] === 'synced' ? 1 : 0,
+                'created'       => $result['operation'] === 'created' ? 1 : 0,
+                'updated'       => $result['operation'] === 'updated' ? 1 : 0,
+                'pending_async' => $result['status'] === 'pending_async' ? 1 : 0,
+                'failed'        => 0,
+                'skipped'       => $result['status'] === 'skipped' ? 1 : 0,
+                'invalid'       => 0,
+            ],
+            'stats'   => self::dashboard_stats_payload(),
+        ] );
+    }
+
+    /**
+     * AJAX: search WooCommerce products/variations for direct sync.
+     *
+     * @return void
+     */
+    public function ajax_search_sync_products(): void {
+        $this->verify_ajax();
+
+        $term = isset( $_POST['term'] ) ? sanitize_text_field( (string) wp_unslash( $_POST['term'] ) ) : '';
+        $term = trim( $term );
+        if ( strlen( $term ) < 2 ) {
+            wp_send_json_success( [ 'items' => [] ] );
+        }
+
+        $limit      = 20;
+        $statuses   = Mapping_Config::sync_only_published() ? [ 'publish' ] : [ 'publish', 'draft', 'private' ];
+        $normalized = strtolower( $term );
+        $digits     = preg_replace( '/\D/', '', $term ) ?? '';
+
+        $candidates = [];
+
+        $search_query = new \WP_Query(
+            [
+                'post_type'              => [ 'product', 'product_variation' ],
+                'post_status'            => $statuses,
+                'posts_per_page'         => $limit,
+                's'                      => $term,
+                'fields'                 => 'ids',
+                'orderby'                => 'date',
+                'order'                  => 'DESC',
+                'no_found_rows'          => true,
+                'ignore_sticky_posts'    => true,
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+            ]
+        );
+        if ( is_array( $search_query->posts ?? null ) ) {
+            $candidates = array_merge( $candidates, array_map( 'absint', $search_query->posts ) );
+        }
+
+        $sku_query = new \WP_Query(
+            [
+                'post_type'              => [ 'product', 'product_variation' ],
+                'post_status'            => $statuses,
+                'posts_per_page'         => $limit,
+                'fields'                 => 'ids',
+                'orderby'                => 'date',
+                'order'                  => 'DESC',
+                'no_found_rows'          => true,
+                'ignore_sticky_posts'    => true,
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+                'meta_query'             => [
+                    [
+                        'key'     => '_sku',
+                        'value'   => $term,
+                        'compare' => 'LIKE',
+                    ],
+                ],
+            ]
+        );
+        if ( is_array( $sku_query->posts ?? null ) ) {
+            $candidates = array_merge( $candidates, array_map( 'absint', $sku_query->posts ) );
+        }
+
+        if ( $digits !== '' ) {
+            $id_query = new \WP_Query(
+                [
+                    'post_type'              => [ 'product', 'product_variation' ],
+                    'post_status'            => $statuses,
+                    'posts_per_page'         => $limit,
+                    'post__in'               => [ (int) $digits ],
+                    'fields'                 => 'ids',
+                    'orderby'                => 'post__in',
+                    'no_found_rows'          => true,
+                    'ignore_sticky_posts'    => true,
+                    'update_post_meta_cache' => false,
+                    'update_post_term_cache' => false,
+                ]
+            );
+            if ( is_array( $id_query->posts ?? null ) ) {
+                $candidates = array_merge( $candidates, array_map( 'absint', $id_query->posts ) );
+            }
+        }
+
+        $items = [];
+        $seen  = [];
+        foreach ( array_values( array_unique( array_filter( $candidates ) ) ) as $product_id ) {
+            $product = wc_get_product( (int) $product_id );
+            if ( ! $product instanceof \WC_Product ) {
+                continue;
+            }
+
+            $label = $this->direct_sync_product_label( $product );
+            $haystack = strtolower(
+                $label . ' ' .
+                (string) $product->get_sku() . ' ' .
+                Mapping_Config::get_ean( $product ) . ' ' .
+                (string) $product->get_id()
+            );
+            if ( ! str_contains( $haystack, $normalized ) && $digits !== '' && ! str_contains( $haystack, $digits ) ) {
+                continue;
+            }
+
+            $key = (int) $product->get_id();
+            if ( isset( $seen[ $key ] ) ) {
+                continue;
+            }
+            $seen[ $key ] = true;
+
+            $items[] = [
+                'id'    => $key,
+                'label' => $label,
+                'sku'   => (string) $product->get_sku(),
+                'ean'   => Mapping_Config::get_ean( $product ),
+                'type'  => $product->is_type( 'variation' ) ? 'variation' : 'product',
+            ];
+
+            if ( count( $items ) >= $limit ) {
+                break;
+            }
+        }
+
+        wp_send_json_success( [ 'items' => $items ] );
+    }
+
+    private function direct_sync_product_label( \WC_Product $product ): string {
+        $product_id = $product->get_id();
+        $name       = $product->get_name();
+        $sku        = (string) $product->get_sku();
+        $ean        = Mapping_Config::get_ean( $product );
+        $type       = $product->is_type( 'variation' ) ? __( 'Variation', 'woo-bol-sync' ) : __( 'Product', 'woo-bol-sync' );
+
+        $parts   = [];
+        $parts[] = $name !== '' ? $name : __( 'Untitled product', 'woo-bol-sync' );
+        $parts[] = '#' . $product_id;
+        if ( $sku !== '' ) {
+            $parts[] = 'SKU: ' . $sku;
+        }
+        if ( $ean !== '' ) {
+            $parts[] = 'EAN: ' . $ean;
+        }
+        $parts[] = '[' . $type . ']';
+
+        return implode( ' · ', $parts );
     }
 
     /**

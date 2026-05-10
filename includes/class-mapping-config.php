@@ -493,11 +493,11 @@ final class Mapping_Config {
         $brand      = '';
 
         if ( $product_id > 0 ) {
-            $brand = self::normalize_listing_text( (string) get_post_meta( $product_id, '_wbs_brand', true ) );
+            $brand = self::normalize_listing_text( self::canonical_brand_value( (string) get_post_meta( $product_id, '_wbs_brand', true ) ) );
         }
 
         if ( $brand === '' ) {
-            $brand = self::normalize_listing_text( self::get_default_brand( $product ) );
+            $brand = self::normalize_listing_text( self::canonical_brand_value( self::get_default_brand( $product ) ) );
         }
 
         return $brand;
@@ -754,7 +754,55 @@ final class Mapping_Config {
          * @param \WC_Product|null $product Optional product context.
          */
         $brand = (string) apply_filters( 'wbs_default_brand', $stored, $product );
-        return trim( $brand );
+        return self::canonical_brand_value( trim( $brand ) );
+    }
+
+    /**
+     * Product record that should supply shared bol.com content metadata.
+     * Variations usually inherit these fields from the variable parent.
+     */
+    public static function get_content_meta_source_product( \WC_Product $product ): \WC_Product {
+        if ( $product->is_type( 'variation' ) ) {
+            $parent = wc_get_product( $product->get_parent_id() );
+            if ( $parent instanceof \WC_Product ) {
+                return $parent;
+            }
+        }
+
+        return $product;
+    }
+
+    /**
+     * Brand value for bol.com content payloads, with variation -> parent fallback.
+     */
+    public static function get_content_brand( \WC_Product $product ): string {
+        $meta_product = self::get_content_meta_source_product( $product );
+        $brand        = self::canonical_brand_value( trim( (string) $meta_product->get_meta( '_wbs_brand', true ) ) );
+
+        if ( $brand === '' ) {
+            $brand = self::get_default_brand( $product );
+        }
+
+        return self::canonical_brand_value( trim( $brand ) );
+    }
+
+    /**
+     * Canonicalize known brand spellings so bol.com always receives the exact brand form expected by the merchant.
+     */
+    public static function canonical_brand_value( string $brand ): string {
+        $brand = trim( $brand );
+        if ( $brand === '' ) {
+            return '';
+        }
+
+        $folded = function_exists( 'remove_accents' ) ? remove_accents( $brand ) : $brand;
+        $folded = function_exists( 'mb_strtolower' ) ? mb_strtolower( $folded, 'UTF-8' ) : strtolower( $folded );
+
+        if ( $folded === 'caffebello' ) {
+            return 'CAFFÈBELLO';
+        }
+
+        return $brand;
     }
 
     public static function get_offer_media_type(): string {

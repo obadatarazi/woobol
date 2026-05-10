@@ -357,6 +357,32 @@ if ( Mapping_Config::get_product_sync_mode() === Mapping_Config::SYNC_MODE_WC_UP
                     );
                     ?>
                 </div>
+                <p class="description" style="margin:10px 0 6px;">
+                    <?php esc_html_e( 'Or sync one exact WooCommerce product/variation directly, without staging.', 'woo-bol-sync' ); ?>
+                </p>
+                <div class="wbs-direct-sync-picker">
+                    <label for="wbs-direct-sync-search" class="screen-reader-text"><?php esc_html_e( 'Search product to sync', 'woo-bol-sync' ); ?></label>
+                    <input
+                        type="search"
+                        id="wbs-direct-sync-search"
+                        class="regular-text"
+                        <?php disabled( ! $has_credentials ); ?>
+                        placeholder="<?php esc_attr_e( 'Search by product name, SKU, EAN, or WooCommerce ID…', 'woo-bol-sync' ); ?>"
+                        autocomplete="off"
+                    />
+                    <input type="hidden" id="wbs-direct-sync-product" value="" />
+                    <div id="wbs-direct-sync-results" class="wbs-direct-sync-results" hidden></div>
+                    <div id="wbs-direct-sync-selected" class="wbs-direct-sync-selected" hidden>
+                        <span id="wbs-direct-sync-selected-label"></span>
+                        <button type="button" id="wbs-direct-sync-clear" class="button-link"><?php esc_html_e( 'Clear', 'woo-bol-sync' ); ?></button>
+                    </div>
+                </div>
+                <button type="button" id="wbs-btn-sync-selected-product" class="button button-secondary wbs-sync-btn"
+                    <?php disabled( ! $has_credentials ); ?> style="margin:0 0 8px 0;">
+                    <span class="dashicons dashicons-update wbs-spin" style="display:none;"></span>
+                    <?php esc_html_e( 'Sync Selected Product', 'woo-bol-sync' ); ?>
+                </button>
+                <p class="description"><?php esc_html_e( 'Search the full WooCommerce catalog by title, SKU, EAN, or product ID.', 'woo-bol-sync' ); ?></p>
                 <button type="button" id="wbs-btn-sync-products" class="button button-primary wbs-sync-btn"
                     <?php disabled( ! $has_credentials ); ?>>
                     <span class="dashicons dashicons-update wbs-spin" style="display:none;"></span>

@@ -13,6 +13,7 @@ namespace WooBolSync\Services;
 
 use WooBolSync\Includes\Logger;
 use WooBolSync\Includes\Mapping_Config;
+use WooBolSync\Models\Category_Map;
 use WooBolSync\Models\Product_Draft;
 use WooBolSync\Models\Product_Mapping;
 use WooBolSync\Models\Sync_Audit;
@@ -838,6 +839,17 @@ class Staging_Sync_Service {
                 $wc_product = $p;
             }
         }
+        if ( $wc_product instanceof \WC_Product ) {
+            $core_meta_attributes = $this->core_bol_meta_attributes( $wc_product );
+            if ( $core_meta_attributes !== [] ) {
+                $attributes = array_merge( $attributes, $core_meta_attributes );
+            }
+
+            $category_attributes = Category_Map::get_template_attributes_for_product( $wc_product );
+            if ( $category_attributes !== [] ) {
+                $attributes = $this->merge_attributes_prefer_product_values( $attributes, $category_attributes );
+            }
+        }
         $attributes = Mapping_Config::ensure_product_group_fallback_on_attributes( $attributes, $wc_product );
 
         $payload = [
@@ -890,13 +902,26 @@ class Staging_Sync_Service {
             }
         }
 
+        Logger::info(
+            'Prepared bol.com content payload for staging sync.',
+            [
+                'wc_product_id'       => $wc_product_id,
+                'ean'                 => $ean,
+                'content_attributes'  => $this->summarize_content_attributes( $payload['attributes'] ?? [] ),
+                'content_assets'      => $this->summarize_content_assets( $payload['assets'] ?? [] ),
+            ],
+            'staging'
+        );
+
         $response = $this->api->create_product_content( $payload );
         if ( is_wp_error( $response ) ) {
             Logger::warning(
                 'Staging catalog content call failed.',
                 [
-                    'ean'     => $ean,
-                    'message' => $response->get_error_message(),
+                    'ean'                => $ean,
+                    'message'            => $response->get_error_message(),
+                    'content_attributes' => $this->summarize_content_attributes( $payload['attributes'] ?? [] ),
+                    'content_assets'     => $this->summarize_content_assets( $payload['assets'] ?? [] ),
                 ],
                 'staging'
             );
@@ -906,13 +931,85 @@ class Staging_Sync_Service {
             Logger::warning(
                 'Staging catalog content returned non-2xx.',
                 [
-                    'ean'     => $ean,
-                    'code'    => $response['code'],
-                    'summary' => $response['summary'] ?? '',
+                    'ean'                => $ean,
+                    'code'               => $response['code'],
+                    'summary'            => $response['summary'] ?? '',
+                    'content_attributes' => $this->summarize_content_attributes( $payload['attributes'] ?? [] ),
+                    'content_assets'     => $this->summarize_content_assets( $payload['assets'] ?? [] ),
                 ],
                 'staging'
             );
         }
+    }
+
+    /**
+     * @return array<int, array{id:string, values:array<int, array{value:string}>}>
+     */
+    private function core_bol_meta_attributes( \WC_Product $product ): array {
+        $map = [
+            '_wbs_net_content'       => 'Net Content',
+            '_wbs_ingredients'       => 'Ingredients',
+            '_wbs_origin_country'    => 'Country of Origin',
+            '_wbs_dutch_description' => 'Dutch Description',
+        ];
+
+        $attributes   = [];
+        $meta_product = Mapping_Config::get_content_meta_source_product( $product );
+        $brand        = Mapping_Config::get_content_brand( $product );
+
+        if ( $brand !== '' ) {
+            $attributes[] = [
+                'id'     => 'Brand',
+                'values' => [
+                    [ 'value' => $brand ],
+                ],
+            ];
+        }
+
+        foreach ( $map as $meta_key => $attribute_id ) {
+            $value = trim( (string) $meta_product->get_meta( $meta_key, true ) );
+            if ( $meta_key === '_wbs_dutch_description' ) {
+                $value = trim( wp_strip_all_tags( $value ) );
+            }
+            if ( $value === '' ) {
+                continue;
+            }
+            $attributes[] = [
+                'id'     => $attribute_id,
+                'values' => [
+                    [ 'value' => $value ],
+                ],
+            ];
+        }
+
+        return $attributes;
+    }
+
+    /**
+     * @param array<int, array{id:string, values:array<int, array{value:string}>}> $product_attributes
+     * @param array<int, array{id:string, values:array<int, array{value:string}>}> $template_attributes
+     * @return array<int, array{id:string, values:array<int, array{value:string}>}>
+     */
+    private function merge_attributes_prefer_product_values( array $product_attributes, array $template_attributes ): array {
+        $existing = [];
+        foreach ( $product_attributes as $attr ) {
+            if ( isset( $attr['id'] ) && is_string( $attr['id'] ) ) {
+                $existing[ strtolower( trim( $attr['id'] ) ) ] = true;
+            }
+        }
+
+        foreach ( $template_attributes as $attr ) {
+            $id = isset( $attr['id'] ) && is_string( $attr['id'] ) ? trim( $attr['id'] ) : '';
+            if ( $id === '' ) {
+                continue;
+            }
+            if ( isset( $existing[ strtolower( $id ) ] ) ) {
+                continue;
+            }
+            $product_attributes[] = $attr;
+        }
+
+        return $product_attributes;
     }
 
     /**
@@ -958,6 +1055,57 @@ class Staging_Sync_Service {
         }
         $decoded = json_decode( $raw, true );
         return is_array( $decoded ) ? $decoded : [];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $attributes
+     * @return array<string, string>
+     */
+    private function summarize_content_attributes( array $attributes ): array {
+        $summary = [];
+        foreach ( $attributes as $attribute ) {
+            if ( ! is_array( $attribute ) ) {
+                continue;
+            }
+            $id = isset( $attribute['id'] ) ? trim( (string) $attribute['id'] ) : '';
+            if ( $id === '' ) {
+                continue;
+            }
+            $values = [];
+            $raw_values = $attribute['values'] ?? [];
+            if ( is_array( $raw_values ) ) {
+                foreach ( $raw_values as $raw_value ) {
+                    if ( ! is_array( $raw_value ) || ! array_key_exists( 'value', $raw_value ) ) {
+                        continue;
+                    }
+                    $values[] = mb_substr( trim( wp_strip_all_tags( (string) $raw_value['value'] ) ), 0, 180 );
+                }
+            }
+            $summary[ $id ] = implode( ' | ', array_filter( $values, static fn( string $value ): bool => $value !== '' ) );
+        }
+        return $summary;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $assets
+     * @return array<int, array{url:string,labels:string}>
+     */
+    private function summarize_content_assets( array $assets ): array {
+        $summary = [];
+        foreach ( $assets as $asset ) {
+            if ( ! is_array( $asset ) ) {
+                continue;
+            }
+            $labels = [];
+            if ( isset( $asset['labels'] ) && is_array( $asset['labels'] ) ) {
+                $labels = array_values( array_filter( array_map( 'strval', $asset['labels'] ) ) );
+            }
+            $summary[] = [
+                'url'    => (string) ( $asset['url'] ?? '' ),
+                'labels' => implode( ',', $labels ),
+            ];
+        }
+        return $summary;
     }
 
     /**

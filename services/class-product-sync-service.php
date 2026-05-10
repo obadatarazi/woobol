@@ -800,9 +800,33 @@ class Product_Sync_Service {
             return $state;
         }
 
+        Logger::info(
+            'Prepared bol.com content payload for product sync.',
+            [
+                'product_id'          => $product->get_id(),
+                'product_name'        => $product->get_name(),
+                'ean'                 => $ean,
+                'content_attributes'  => $this->summarize_content_attributes( $payload['attributes'] ?? [] ),
+                'content_assets'      => $this->summarize_content_assets( $payload['assets'] ?? [] ),
+            ],
+            'products'
+        );
+
         $response = $this->api->create_product_content( $payload );
         if ( is_wp_error( $response ) || $response['code'] < 200 || $response['code'] >= 300 ) {
             $state['catalog_hint'] = is_wp_error( $response ) ? $response->get_error_message() : (string) $response['summary'];
+            Logger::warning(
+                'bol.com content payload failed during product sync.',
+                [
+                    'product_id'         => $product->get_id(),
+                    'product_name'       => $product->get_name(),
+                    'ean'                => $ean,
+                    'message'            => $state['catalog_hint'],
+                    'content_attributes' => $this->summarize_content_attributes( $payload['attributes'] ?? [] ),
+                    'content_assets'     => $this->summarize_content_assets( $payload['assets'] ?? [] ),
+                ],
+                'products'
+            );
             return $state;
         }
 
@@ -819,6 +843,18 @@ class Product_Sync_Service {
             }
             if ( ! is_wp_error( $report ) && $report['code'] >= 200 && $report['code'] < 300 && is_array( $report['body'] ) ) {
                 $state['catalog_hint'] = $this->catalog_hint_from_upload_report( $report['body'] );
+                Logger::info(
+                    'bol.com content upload report received for product sync.',
+                    [
+                        'upload_id'      => $upload_id,
+                        'product_id'     => $product->get_id(),
+                        'product_name'   => $product->get_name(),
+                        'ean'            => $ean,
+                        'upload_report'  => $report['body'],
+                        'catalog_hint'   => $state['catalog_hint'],
+                    ],
+                    'products'
+                );
             } elseif ( ! is_wp_error( $report ) && (int) ( $report['code'] ?? 0 ) === 404 ) {
                 $meta = $this->api->get_last_request_meta();
                 Logger::info(
@@ -921,8 +957,8 @@ class Product_Sync_Service {
             ];
         }
         
-        // Add all gallery images
-        $gallery_ids = $product->get_gallery_image_ids();
+        // Add all gallery images, inheriting the parent gallery for variations.
+        $gallery_ids = $this->get_content_gallery_image_ids( $product );
         if ( is_array( $gallery_ids ) && $gallery_ids !== [] ) {
             $additional_labels = [ 'BACK', 'LEFT', 'RIGHT', 'TOP', 'BOTTOM' ];
             $label_index = 0;
@@ -1002,11 +1038,8 @@ class Product_Sync_Service {
         ];
 
         $attributes = [];
-        $brand = Mapping_Config::get_default_brand( $product );
-        $product_brand = trim( (string) $product->get_meta( '_wbs_brand', true ) );
-        if ( $product_brand !== '' ) {
-            $brand = $product_brand;
-        }
+        $meta_product = Mapping_Config::get_content_meta_source_product( $product );
+        $brand        = Mapping_Config::get_content_brand( $product );
         if ( $brand !== '' ) {
             $attributes[] = [
                 'id'     => 'Brand',
@@ -1019,12 +1052,15 @@ class Product_Sync_Service {
             if ( $meta_key === '_wbs_dutch_description' && ! Mapping_Config::sync_content_description_enabled() ) {
                 continue;
             }
-            $value = trim( (string) $product->get_meta( $meta_key, true ) );
+            $value = trim( (string) $meta_product->get_meta( $meta_key, true ) );
             if ( $meta_key === '_wbs_dutch_description' ) {
                 $value = trim( wp_strip_all_tags( $value ) );
             }
             if ( $meta_key === '_wbs_net_content' && $value === '' ) {
                 $value = $this->normalize_net_content_from_meta( $product );
+                if ( $value === '' && $meta_product->get_id() !== $product->get_id() ) {
+                    $value = $this->normalize_net_content_from_meta( $meta_product );
+                }
             }
             if ( $value === '' ) {
                 continue;
@@ -1097,6 +1133,7 @@ class Product_Sync_Service {
      * @return string[]
      */
     private function missing_core_meta_keys( \WC_Product $product ): array {
+        $meta_product = Mapping_Config::get_content_meta_source_product( $product );
         $required = [
             '_wbs_net_content',
             '_wbs_ingredients',
@@ -1105,7 +1142,13 @@ class Product_Sync_Service {
         ];
         $missing = [];
         foreach ( $required as $key ) {
-            $value = trim( (string) $product->get_meta( $key, true ) );
+            $value = trim( (string) $meta_product->get_meta( $key, true ) );
+            if ( $key === '_wbs_net_content' && $value === '' ) {
+                $value = $this->normalize_net_content_from_meta( $product );
+                if ( $value === '' && $meta_product->get_id() !== $product->get_id() ) {
+                    $value = $this->normalize_net_content_from_meta( $meta_product );
+                }
+            }
             if ( $value === '' ) {
                 $missing[] = $key;
             }
@@ -1129,7 +1172,7 @@ class Product_Sync_Service {
                 return $url;
             }
         }
-        $gallery = $product->get_gallery_image_ids();
+        $gallery = $this->get_content_gallery_image_ids( $product );
         if ( is_array( $gallery ) ) {
             foreach ( $gallery as $gallery_id ) {
                 $url = wp_get_attachment_url( (int) $gallery_id );
@@ -1139,6 +1182,31 @@ class Product_Sync_Service {
             }
         }
         return '';
+    }
+
+    /**
+     * Gallery images used for bol content payloads.
+     * Variations inherit the parent gallery because WC variations do not keep their own gallery set.
+     *
+     * @return int[]
+     */
+    private function get_content_gallery_image_ids( \WC_Product $product ): array {
+        $gallery = $product->get_gallery_image_ids();
+        if ( is_array( $gallery ) && $gallery !== [] ) {
+            return array_values( array_map( 'intval', $gallery ) );
+        }
+
+        if ( $product->is_type( 'variation' ) ) {
+            $parent = wc_get_product( $product->get_parent_id() );
+            if ( $parent instanceof \WC_Product ) {
+                $parent_gallery = $parent->get_gallery_image_ids();
+                if ( is_array( $parent_gallery ) ) {
+                    return array_values( array_map( 'intval', $parent_gallery ) );
+                }
+            }
+        }
+
+        return [];
     }
 
     /**
@@ -1176,5 +1244,56 @@ class Product_Sync_Service {
             return __( 'bol.com content upload reported issues. Check the upload report details in logs.', 'woo-bol-sync' );
         }
         return '';
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $attributes
+     * @return array<string, string>
+     */
+    private function summarize_content_attributes( array $attributes ): array {
+        $summary = [];
+        foreach ( $attributes as $attribute ) {
+            if ( ! is_array( $attribute ) ) {
+                continue;
+            }
+            $id = isset( $attribute['id'] ) ? trim( (string) $attribute['id'] ) : '';
+            if ( $id === '' ) {
+                continue;
+            }
+            $values = [];
+            $raw_values = $attribute['values'] ?? [];
+            if ( is_array( $raw_values ) ) {
+                foreach ( $raw_values as $raw_value ) {
+                    if ( ! is_array( $raw_value ) || ! array_key_exists( 'value', $raw_value ) ) {
+                        continue;
+                    }
+                    $values[] = mb_substr( trim( wp_strip_all_tags( (string) $raw_value['value'] ) ), 0, 180 );
+                }
+            }
+            $summary[ $id ] = implode( ' | ', array_filter( $values, static fn( string $value ): bool => $value !== '' ) );
+        }
+        return $summary;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $assets
+     * @return array<int, array{url:string,labels:string}>
+     */
+    private function summarize_content_assets( array $assets ): array {
+        $summary = [];
+        foreach ( $assets as $asset ) {
+            if ( ! is_array( $asset ) ) {
+                continue;
+            }
+            $labels = [];
+            if ( isset( $asset['labels'] ) && is_array( $asset['labels'] ) ) {
+                $labels = array_values( array_filter( array_map( 'strval', $asset['labels'] ) ) );
+            }
+            $summary[] = [
+                'url'    => (string) ( $asset['url'] ?? '' ),
+                'labels' => implode( ',', $labels ),
+            ];
+        }
+        return $summary;
     }
 }
