@@ -2,3 +2,6 @@
 *.log
 /vendor/
 /node_modules/
+
+# Staging folder created by build-release.sh (not source of truth)
+dist/woo-bol-sync/

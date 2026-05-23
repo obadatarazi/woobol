@@ -2,9 +2,9 @@
 Contributors: cupcoding
 Tags: woocommerce, bol.com, sync, integration, marketplace
 Requires at least: 6.2
-Tested up to: 6.7
+Tested up to: 7.0
 Requires PHP: 8.2
-Stable tag: 3.0.28
+Stable tag: 3.1.2
 License: Proprietary
 
 Production-grade WooCommerce ↔ bol.com integration: product sync, order import, signed webhooks, configurable schedules, and DB-backed logging.
@@ -17,7 +17,7 @@ WooBolSync keeps WooCommerce products and bol.com offers in lockstep and pulls b
 
 * Push WooCommerce products to bol.com as offers (create / update / stock / price).
 * Pull bol.com orders into WooCommerce, with shipment, cancellation, and return reconciliation.
-* Configurable batch schedules (daily / weekly / monthly) plus event-driven sync on WooCommerce updates.
+* Configurable product batch schedules (daily / weekly / monthly) plus recurring order import (5–20 minutes).
 * Signed inbound webhook endpoint with RSA signature verification, optional shared-secret fallback, and rate limiting.
 * Smart Sync hash skips unchanged products, with a one-click "force update existing" path.
 * Field mapping UI for EAN/GTIN, listing title, and description sources.
@@ -54,7 +54,7 @@ Unauthenticated POSTs are rejected with HTTP 401. While bringing up a fresh subs
 WooBolSync registers four cron events:
 
 * `wbs_cron_sync_products` (single events chained from the configured schedule, or omitted in *WooCommerce updates only* mode).
-* `wbs_cron_sync_orders` (single events chained from the configured schedule).
+* `wbs_cron_sync_orders` (recurring event every 5, 10, 15, or 20 minutes).
 * `wbs_cron_ensure_subscription` (twice daily housekeeping).
 * `wbs_cron_purge_logs` (daily log retention).
 
@@ -72,6 +72,11 @@ Uninstalling (Plugins → Delete) **removes** all WooBolSync-owned data:
 * All scheduled cron events.
 
 == Changelog ==
+
+= 3.1.2 =
+* Compatibility: tested up to WordPress 7.0.
+* Changed: order import schedule is now a recurring interval (5, 10, 15, or 20 minutes only); daily/weekly/monthly order modes removed from settings.
+* Improved: webhook debounce and manual order sync respect the configured minimum interval between imports.
 
 = 3.0.24 =
 * Changed: **Bol Sync → bol Orders** list fetch sends `fulfilment-method` (ALL / FBR / FBB), optional `latest-change-date` for historical rows, and shows per-line **fulfilment status** from `orderItems`. Connection test and scheduled order list use `fulfilment-method=ALL`. On upgrade, existing **transient cache** is cleared as before (`wbs_db_version` bump).

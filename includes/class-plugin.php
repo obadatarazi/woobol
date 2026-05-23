@@ -77,6 +77,7 @@ final class Plugin {
             return;
         }
 
+        Sync_Scheduler::register_hooks();
         Sync_Scheduler::bootstrap_migration();
 
         Sync_Hooks::register( $this->api );
@@ -148,12 +149,11 @@ final class Plugin {
         if ( ! class_exists( 'WooCommerce' ) ) {
             return;
         }
-        try {
-            $service = new Order_Sync_Service( $this->api );
-            $service->sync_orders();
-        } finally {
-            Sync_Scheduler::chain_next_order_run();
+        if ( ! Sync_Scheduler::can_run_order_sync() ) {
+            return;
         }
+        $service = new Order_Sync_Service( $this->api );
+        $service->sync_orders();
     }
 
     /**

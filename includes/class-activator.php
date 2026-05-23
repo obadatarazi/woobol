@@ -396,17 +396,11 @@ final class Activator {
         if ( false === get_option( Mapping_Config::OPTION_PRODUCT_SYNC_MONTHDAY, false ) ) {
             add_option( Mapping_Config::OPTION_PRODUCT_SYNC_MONTHDAY, 1 );
         }
-        if ( false === get_option( Mapping_Config::OPTION_ORDER_SYNC_MODE, false ) ) {
-            add_option( Mapping_Config::OPTION_ORDER_SYNC_MODE, Mapping_Config::SYNC_MODE_DAILY );
-        }
-        if ( false === get_option( Mapping_Config::OPTION_ORDER_SYNC_TIME, false ) ) {
-            add_option( Mapping_Config::OPTION_ORDER_SYNC_TIME, '02:15' );
-        }
-        if ( false === get_option( Mapping_Config::OPTION_ORDER_SYNC_WEEKDAY, false ) ) {
-            add_option( Mapping_Config::OPTION_ORDER_SYNC_WEEKDAY, 1 );
-        }
-        if ( false === get_option( Mapping_Config::OPTION_ORDER_SYNC_MONTHDAY, false ) ) {
-            add_option( Mapping_Config::OPTION_ORDER_SYNC_MONTHDAY, 1 );
+        if ( false === get_option( Mapping_Config::OPTION_ORDER_SYNC_INTERVAL, false ) ) {
+            add_option(
+                Mapping_Config::OPTION_ORDER_SYNC_INTERVAL,
+                Mapping_Config::DEFAULT_ORDER_SYNC_INTERVAL_MINUTES
+            );
         }
         if ( false === get_option( Mapping_Config::OPTION_STAGING_ENABLED, false ) ) {
             add_option( Mapping_Config::OPTION_STAGING_ENABLED, 0 );

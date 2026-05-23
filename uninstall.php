@@ -62,6 +62,7 @@ $options = [
     // Schema & migrations.
     'wbs_db_version',
     'wbs_sync_scheduler_v2',
+    'wbs_sync_scheduler_v3',
     // Mapping & listing defaults.
     'wbs_field_map',
     'wbs_default_delivery_code',
@@ -94,6 +95,8 @@ $options = [
     'wbs_order_sync_time',
     'wbs_order_sync_weekday',
     'wbs_order_sync_monthday',
+    'wbs_order_sync_interval_minutes',
+    'wbs_order_sync_last_run',
     'wbs_last_order_sync_at',
     // Webhook.
     'wbs_webhook_enabled',
@@ -109,6 +112,7 @@ $options = [
     // Staging.
     'wbs_staging_mode_enabled',
     'wbs_staging_auto_ingest',
+    'wbs_staging_sync_enabled',
 ];
 
 foreach ( $options as $option ) {

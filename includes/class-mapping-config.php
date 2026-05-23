@@ -46,6 +46,7 @@ final class Mapping_Config {
 
     public const OPTION_STAGING_ENABLED       = 'wbs_staging_mode_enabled';
     public const OPTION_STAGING_AUTO_INGEST   = 'wbs_staging_auto_ingest';
+    public const OPTION_STAGING_SYNC_ENABLED  = 'wbs_staging_sync_enabled';
 
     public const OPTION_PRODUCT_SYNC_MODE     = 'wbs_product_sync_mode';
     public const OPTION_PRODUCT_SYNC_ENABLED  = 'wbs_product_sync_enabled';
@@ -74,6 +75,13 @@ final class Mapping_Config {
     public const OPTION_ORDER_SYNC_TIME     = 'wbs_order_sync_time';
     public const OPTION_ORDER_SYNC_WEEKDAY  = 'wbs_order_sync_weekday';
     public const OPTION_ORDER_SYNC_MONTHDAY = 'wbs_order_sync_monthday';
+    public const OPTION_ORDER_SYNC_INTERVAL = 'wbs_order_sync_interval_minutes';
+    public const OPTION_ORDER_SYNC_LAST_RUN = 'wbs_order_sync_last_run';
+
+    /** @var int[] */
+    public const ORDER_SYNC_INTERVAL_CHOICES = [ 5, 10, 15, 20 ];
+
+    public const DEFAULT_ORDER_SYNC_INTERVAL_MINUTES = 15;
 
     public const SYNC_MODE_DAILY     = 'daily';
     public const SYNC_MODE_WEEKLY    = 'weekly';
@@ -712,6 +720,10 @@ final class Mapping_Config {
         return (int) get_option( self::OPTION_STAGING_AUTO_INGEST, 0 ) === 1;
     }
 
+    public static function staging_sync_enabled(): bool {
+        return (int) get_option( self::OPTION_STAGING_SYNC_ENABLED, 1 ) === 1;
+    }
+
     public static function webhook_enabled(): bool {
         return (int) get_option( self::OPTION_WEBHOOK_ENABLED, 1 ) === 1;
     }
@@ -892,25 +904,33 @@ final class Mapping_Config {
         return min( 28, max( 1, $d ) );
     }
 
-    public static function get_order_sync_mode(): string {
-        $m = sanitize_key( (string) get_option( self::OPTION_ORDER_SYNC_MODE, self::SYNC_MODE_DAILY ) );
-        $allowed = [ self::SYNC_MODE_DAILY, self::SYNC_MODE_WEEKLY, self::SYNC_MODE_MONTHLY ];
-        return in_array( $m, $allowed, true ) ? $m : self::SYNC_MODE_DAILY;
+    public static function get_order_sync_interval_minutes(): int {
+        $m = (int) get_option( self::OPTION_ORDER_SYNC_INTERVAL, self::DEFAULT_ORDER_SYNC_INTERVAL_MINUTES );
+        return in_array( $m, self::ORDER_SYNC_INTERVAL_CHOICES, true )
+            ? $m
+            : self::DEFAULT_ORDER_SYNC_INTERVAL_MINUTES;
     }
 
-    public static function get_order_sync_time(): string {
-        $t = trim( (string) get_option( self::OPTION_ORDER_SYNC_TIME, '02:15' ) );
-        return preg_match( '/^\d{1,2}:\d{2}$/', $t ) === 1 ? $t : '02:15';
+    public static function get_order_sync_interval_seconds(): int {
+        return self::get_order_sync_interval_minutes() * MINUTE_IN_SECONDS;
     }
 
-    public static function get_order_sync_weekday(): int {
-        $w = (int) get_option( self::OPTION_ORDER_SYNC_WEEKDAY, 1 );
-        return min( 6, max( 0, $w ) );
+    public static function get_order_sync_last_run(): int {
+        return max( 0, (int) get_option( self::OPTION_ORDER_SYNC_LAST_RUN, 0 ) );
     }
 
-    public static function get_order_sync_monthday(): int {
-        $d = (int) get_option( self::OPTION_ORDER_SYNC_MONTHDAY, 1 );
-        return min( 28, max( 1, $d ) );
+    public static function set_order_sync_last_run( ?int $timestamp = null ): void {
+        update_option( self::OPTION_ORDER_SYNC_LAST_RUN, $timestamp ?? time(), false );
+    }
+
+    /**
+     * @param int $minutes
+     */
+    public static function sanitize_order_sync_interval_minutes( $minutes ): int {
+        $minutes = (int) $minutes;
+        return in_array( $minutes, self::ORDER_SYNC_INTERVAL_CHOICES, true )
+            ? $minutes
+            : self::DEFAULT_ORDER_SYNC_INTERVAL_MINUTES;
     }
 
     public static function get_subscription_id(): string {

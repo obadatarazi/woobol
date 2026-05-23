@@ -69,6 +69,7 @@ class Order_Sync_Service {
 
         $stats['returns'] = $this->sync_returns();
         update_option( Mapping_Config::OPTION_LAST_ORDER_SYNC, current_time( 'mysql', true ) );
+        Mapping_Config::set_order_sync_last_run();
 
         return $stats;
     }

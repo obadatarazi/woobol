@@ -66,10 +66,7 @@ class Admin_Menu {
         Mapping_Config::OPTION_PRODUCT_SYNC_TIME,
         Mapping_Config::OPTION_PRODUCT_SYNC_WEEKDAY,
         Mapping_Config::OPTION_PRODUCT_SYNC_MONTHDAY,
-        Mapping_Config::OPTION_ORDER_SYNC_MODE,
-        Mapping_Config::OPTION_ORDER_SYNC_TIME,
-        Mapping_Config::OPTION_ORDER_SYNC_WEEKDAY,
-        Mapping_Config::OPTION_ORDER_SYNC_MONTHDAY,
+        Mapping_Config::OPTION_ORDER_SYNC_INTERVAL,
     ];
 
     /**
@@ -239,30 +236,16 @@ class Admin_Menu {
             'sanitize_callback' => [ $this, 'sanitize_monthday' ],
             'default'           => 1,
         ] );
-        register_setting( self::SETTINGS_GROUP, Mapping_Config::OPTION_ORDER_SYNC_MODE, [
-            'type'              => 'string',
-            'sanitize_callback' => [ $this, 'sanitize_order_sync_mode' ],
-            'default'           => Mapping_Config::SYNC_MODE_DAILY,
-        ] );
-        register_setting( self::SETTINGS_GROUP, Mapping_Config::OPTION_ORDER_SYNC_TIME, [
-            'type'              => 'string',
-            'sanitize_callback' => [ $this, 'sanitize_order_sync_time' ],
-            'default'           => '02:15',
-        ] );
-        register_setting( self::SETTINGS_GROUP, Mapping_Config::OPTION_ORDER_SYNC_WEEKDAY, [
+        register_setting( self::SETTINGS_GROUP, Mapping_Config::OPTION_ORDER_SYNC_INTERVAL, [
             'type'              => 'integer',
-            'sanitize_callback' => [ $this, 'sanitize_weekday' ],
-            'default'           => 1,
-        ] );
-        register_setting( self::SETTINGS_GROUP, Mapping_Config::OPTION_ORDER_SYNC_MONTHDAY, [
-            'type'              => 'integer',
-            'sanitize_callback' => [ $this, 'sanitize_monthday' ],
-            'default'           => 1,
+            'sanitize_callback' => [ $this, 'sanitize_order_sync_interval' ],
+            'default'           => Mapping_Config::DEFAULT_ORDER_SYNC_INTERVAL_MINUTES,
         ] );
 
         // ── Developer ─────────────────────────────────────────────────────────
         register_setting( self::SETTINGS_GROUP, Mapping_Config::OPTION_STAGING_ENABLED,     [ 'type' => 'integer', 'sanitize_callback' => 'absint' ] );
         register_setting( self::SETTINGS_GROUP, Mapping_Config::OPTION_STAGING_AUTO_INGEST, [ 'type' => 'integer', 'sanitize_callback' => 'absint' ] );
+        register_setting( self::SETTINGS_GROUP, Mapping_Config::OPTION_STAGING_SYNC_ENABLED, [ 'type' => 'integer', 'sanitize_callback' => 'absint', 'default' => 1 ] );
 
         register_setting( self::SETTINGS_GROUP, 'wbs_debug_mode',         [ 'type' => 'integer', 'sanitize_callback' => 'absint' ] );
         register_setting( self::SETTINGS_GROUP, 'wbs_log_retention_days', [ 'type' => 'integer', 'sanitize_callback' => [ $this, 'sanitize_retention' ] ] );
@@ -300,14 +283,12 @@ class Admin_Menu {
         add_settings_field( 'wbs_f_product_sync_weekday', __( 'Day of week', 'woo-bol-sync' ), [ $this, 'field_product_sync_weekday' ], self::SLUG_SETT, 'wbs_sec_product_sched', [ 'label_for' => Mapping_Config::OPTION_PRODUCT_SYNC_WEEKDAY ] );
         add_settings_field( 'wbs_f_product_sync_monthday', __( 'Day of month', 'woo-bol-sync' ), [ $this, 'field_product_sync_monthday' ], self::SLUG_SETT, 'wbs_sec_product_sched', [ 'label_for' => Mapping_Config::OPTION_PRODUCT_SYNC_MONTHDAY ] );
 
-        add_settings_field( 'wbs_f_order_sync_mode', __( 'Order import mode', 'woo-bol-sync' ), [ $this, 'field_order_sync_mode' ], self::SLUG_SETT, 'wbs_sec_order_sched', [ 'label_for' => Mapping_Config::OPTION_ORDER_SYNC_MODE ] );
-        add_settings_field( 'wbs_f_order_sync_time', __( 'Run at (site time)', 'woo-bol-sync' ), [ $this, 'field_order_sync_time' ], self::SLUG_SETT, 'wbs_sec_order_sched', [ 'label_for' => Mapping_Config::OPTION_ORDER_SYNC_TIME ] );
-        add_settings_field( 'wbs_f_order_sync_weekday', __( 'Day of week', 'woo-bol-sync' ), [ $this, 'field_order_sync_weekday' ], self::SLUG_SETT, 'wbs_sec_order_sched', [ 'label_for' => Mapping_Config::OPTION_ORDER_SYNC_WEEKDAY ] );
-        add_settings_field( 'wbs_f_order_sync_monthday', __( 'Day of month', 'woo-bol-sync' ), [ $this, 'field_order_sync_monthday' ], self::SLUG_SETT, 'wbs_sec_order_sched', [ 'label_for' => Mapping_Config::OPTION_ORDER_SYNC_MONTHDAY ] );
+        add_settings_field( 'wbs_f_order_sync_interval', __( 'Order import interval', 'woo-bol-sync' ), [ $this, 'field_order_sync_interval' ], self::SLUG_SETT, 'wbs_sec_order_sched', [ 'label_for' => Mapping_Config::OPTION_ORDER_SYNC_INTERVAL ] );
 
         // ── Fields: developer ─────────────────────────────────────────────────
         add_settings_field( 'wbs_f_staging_mode',        __( 'Staging & Review mode', 'woo-bol-sync' ),        [ $this, 'field_staging_mode' ],        self::SLUG_SETT, 'wbs_sec_sync', [ 'label_for' => Mapping_Config::OPTION_STAGING_ENABLED ] );
         add_settings_field( 'wbs_f_staging_auto_ingest', __( 'Staging auto-ingest on cron', 'woo-bol-sync' ), [ $this, 'field_staging_auto_ingest' ], self::SLUG_SETT, 'wbs_sec_sync', [ 'label_for' => Mapping_Config::OPTION_STAGING_AUTO_INGEST ] );
+        add_settings_field( 'wbs_f_staging_sync_enabled', __( 'Allow staging sync to bol.com', 'woo-bol-sync' ), [ $this, 'field_staging_sync_enabled' ], self::SLUG_SETT, 'wbs_sec_sync', [ 'label_for' => Mapping_Config::OPTION_STAGING_SYNC_ENABLED ] );
 
         add_settings_field( 'wbs_f_debug_mode',    __( 'Debug Mode', 'woo-bol-sync' ),         [ $this, 'field_debug_mode' ],    self::SLUG_SETT, 'wbs_sec_dev', [ 'label_for' => 'wbs_debug_mode' ] );
         add_settings_field( 'wbs_f_log_retention', __( 'Log Retention (days)', 'woo-bol-sync' ),[ $this, 'field_log_retention' ], self::SLUG_SETT, 'wbs_sec_dev', [ 'label_for' => 'wbs_log_retention_days' ] );
@@ -1062,6 +1043,20 @@ class Admin_Menu {
      */
     public function ajax_sync_orders(): void {
         $this->verify_ajax();
+        if ( ! Sync_Scheduler::can_run_order_sync() ) {
+            $wait = Sync_Scheduler::seconds_until_order_sync_allowed();
+            wp_send_json_error(
+                [
+                    'message' => sprintf(
+                        /* translators: %d: seconds until the next order import is allowed */
+                        __( 'Order import was run recently. Please wait %d seconds before syncing again.', 'woo-bol-sync' ),
+                        $wait
+                    ),
+                    'retry_after' => $wait,
+                ],
+                429
+            );
+        }
         Ajax_Runtime::prepare_long_request();
         $service = new \WooBolSync\Services\Order_Sync_Service( $this->api );
         $result  = $service->sync_orders();
@@ -1392,6 +1387,20 @@ class Admin_Menu {
 
     public function ajax_retry_failed_orders(): void {
         $this->verify_ajax();
+        if ( ! Sync_Scheduler::can_run_order_sync() ) {
+            $wait = Sync_Scheduler::seconds_until_order_sync_allowed();
+            wp_send_json_error(
+                [
+                    'message' => sprintf(
+                        /* translators: %d: seconds until the next order import is allowed */
+                        __( 'Order import was run recently. Please wait %d seconds before syncing again.', 'woo-bol-sync' ),
+                        $wait
+                    ),
+                    'retry_after' => $wait,
+                ],
+                429
+            );
+        }
         Ajax_Runtime::prepare_long_request();
         $service = new Order_Sync_Service( $this->api );
         $result  = $service->sync_orders();
@@ -1854,7 +1863,7 @@ class Admin_Menu {
 
     /** @return void */
     public function sec_order_sched_desc(): void {
-        echo '<p>' . esc_html__( 'Controls how often bol.com orders are imported in bulk. A bol.com webhook POST to your callback URL can still trigger an immediate import when webhook automation is enabled.', 'woo-bol-sync' ) . '</p>';
+        echo '<p>' . esc_html__( 'Imports bol.com orders into WooCommerce on a fixed recurring interval. Webhook notifications and manual sync from the dashboard also respect this minimum time between imports.', 'woo-bol-sync' ) . '</p>';
     }
 
     // ── Field renderers ───────────────────────────────────────────────────────
@@ -1950,6 +1959,15 @@ class Admin_Menu {
         echo '<label for="' . esc_attr( Mapping_Config::OPTION_STAGING_AUTO_INGEST ) . '"><input type="checkbox" id="' . esc_attr( Mapping_Config::OPTION_STAGING_AUTO_INGEST ) . '" name="' . esc_attr( Mapping_Config::OPTION_STAGING_AUTO_INGEST ) . '" value="1" ' . $checked . ' /> ';
         echo esc_html__( 'Auto-ingest WooCommerce products into staging drafts before every scheduled sync run', 'woo-bol-sync' ) . '</label>';
         echo '<p class="description">' . esc_html__( 'Only takes effect when Staging & Review mode is enabled. Products that are already in staging keep their admin overrides.', 'woo-bol-sync' ) . '</p>';
+    }
+
+    /** @return void */
+    public function field_staging_sync_enabled(): void {
+        echo '<input type="hidden" name="' . esc_attr( Mapping_Config::OPTION_STAGING_SYNC_ENABLED ) . '" value="0" />';
+        $checked = checked( 1, (int) get_option( Mapping_Config::OPTION_STAGING_SYNC_ENABLED, 1 ), false );
+        echo '<label for="' . esc_attr( Mapping_Config::OPTION_STAGING_SYNC_ENABLED ) . '"><input type="checkbox" id="' . esc_attr( Mapping_Config::OPTION_STAGING_SYNC_ENABLED ) . '" name="' . esc_attr( Mapping_Config::OPTION_STAGING_SYNC_ENABLED ) . '" value="1" ' . $checked . ' /> ';
+        echo esc_html__( 'Allow approved staging drafts to publish updates/offers on bol.com', 'woo-bol-sync' ) . '</label>';
+        echo '<p class="description">' . esc_html__( 'Turn this off for a hard safety lock. Approved staging drafts remain editable and reviewable, but the staging sync engine will skip publishing to bol.com (including new offer creation via POST /offers).', 'woo-bol-sync' ) . '</p>';
     }
 
     /** @return void */
@@ -2107,42 +2125,16 @@ class Admin_Menu {
     }
 
     /** @return void */
-    public function field_order_sync_mode(): void {
-        $cur = Mapping_Config::get_order_sync_mode();
-        $opts = [
-            Mapping_Config::SYNC_MODE_DAILY   => __( 'Daily', 'woo-bol-sync' ),
-            Mapping_Config::SYNC_MODE_WEEKLY  => __( 'Weekly', 'woo-bol-sync' ),
-            Mapping_Config::SYNC_MODE_MONTHLY => __( 'Monthly', 'woo-bol-sync' ),
-        ];
-        echo '<select id="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_MODE ) . '" name="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_MODE ) . '">';
-        foreach ( $opts as $v => $label ) {
-            echo '<option value="' . esc_attr( $v ) . '"' . selected( $cur, $v, false ) . '>' . esc_html( $label ) . '</option>';
+    public function field_order_sync_interval(): void {
+        $cur = Mapping_Config::get_order_sync_interval_minutes();
+        echo '<select id="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_INTERVAL ) . '" name="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_INTERVAL ) . '">';
+        foreach ( Mapping_Config::ORDER_SYNC_INTERVAL_CHOICES as $minutes ) {
+            /* translators: %d: number of minutes between order imports */
+            $label = sprintf( __( 'Every %d minutes', 'woo-bol-sync' ), $minutes );
+            echo '<option value="' . (int) $minutes . '"' . selected( $cur, $minutes, false ) . '>' . esc_html( $label ) . '</option>';
         }
         echo '</select>';
-    }
-
-    /** @return void */
-    public function field_order_sync_time(): void {
-        $val = esc_attr( Mapping_Config::get_order_sync_time() );
-        echo '<input type="time" step="60" id="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_TIME ) . '" name="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_TIME ) . '" value="' . $val . '" class="wbs-time-input" />';
-        echo '<p class="description">' . esc_html__( 'Used for daily, weekly, and monthly runs (site timezone).', 'woo-bol-sync' ) . '</p>';
-    }
-
-    /** @return void */
-    public function field_order_sync_weekday(): void {
-        $cur = Mapping_Config::get_order_sync_weekday();
-        echo '<select id="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_WEEKDAY ) . '" name="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_WEEKDAY ) . '">';
-        foreach ( self::weekday_choices() as $dow => $label ) {
-            echo '<option value="' . (int) $dow . '"' . selected( $cur, (int) $dow, false ) . '>' . esc_html( $label ) . '</option>';
-        }
-        echo '</select>';
-    }
-
-    /** @return void */
-    public function field_order_sync_monthday(): void {
-        $val = Mapping_Config::get_order_sync_monthday();
-        echo '<input type="number" min="1" max="28" class="small-text" id="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_MONTHDAY ) . '" name="' . esc_attr( Mapping_Config::OPTION_ORDER_SYNC_MONTHDAY ) . '" value="' . (int) $val . '" />';
-        echo '<p class="description">' . esc_html__( '1–28 (capped so every month is valid).', 'woo-bol-sync' ) . '</p>';
+        echo '<p class="description">' . esc_html__( 'Only these four intervals are available. WP-Cron runs in the background when your site receives traffic.', 'woo-bol-sync' ) . '</p>';
     }
 
     /**
@@ -2319,25 +2311,14 @@ class Admin_Menu {
         return in_array( $v, $allowed, true ) ? $v : Mapping_Config::SYNC_MODE_DAILY;
     }
 
-    /** @param mixed $v @return string */
-    public function sanitize_order_sync_mode( $v ): string {
-        $v = sanitize_key( (string) $v );
-        $allowed = [
-            Mapping_Config::SYNC_MODE_DAILY,
-            Mapping_Config::SYNC_MODE_WEEKLY,
-            Mapping_Config::SYNC_MODE_MONTHLY,
-        ];
-        return in_array( $v, $allowed, true ) ? $v : Mapping_Config::SYNC_MODE_DAILY;
+    /** @param mixed $v @return int */
+    public function sanitize_order_sync_interval( $v ): int {
+        return Mapping_Config::sanitize_order_sync_interval_minutes( $v );
     }
 
     /** @param mixed $v @return string */
     public function sanitize_product_sync_time( $v ): string {
         return $this->sanitize_sync_time_hm( $v, '02:00' );
-    }
-
-    /** @param mixed $v @return string */
-    public function sanitize_order_sync_time( $v ): string {
-        return $this->sanitize_sync_time_hm( $v, '02:15' );
     }
 
     /**

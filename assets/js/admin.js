@@ -1806,14 +1806,10 @@
         $( '#wbs_product_sync_weekday' ).closest( 'tr' ).toggle( pBatch && pMode === 'weekly' );
         $( '#wbs_product_sync_monthday' ).closest( 'tr' ).toggle( pBatch && pMode === 'monthly' );
 
-        var oMode = $( '#wbs_order_sync_mode' ).val();
-        $( '#wbs_order_sync_time' ).closest( 'tr' ).toggle( true );
-        $( '#wbs_order_sync_weekday' ).closest( 'tr' ).toggle( oMode === 'weekly' );
-        $( '#wbs_order_sync_monthday' ).closest( 'tr' ).toggle( oMode === 'monthly' );
     }
 
     wbsToggleScheduleRows();
-    $( document ).on( 'change', '#wbs_product_sync_mode, #wbs_order_sync_mode', wbsToggleScheduleRows );
+    $( document ).on( 'change', '#wbs_product_sync_mode', wbsToggleScheduleRows );
 
     $( document ).on( 'input change', '#_wbs_net_content_value, #_wbs_net_content_unit, #_wbs_net_content_pieces', updateNetContentPreview );
     updateNetContentPreview();

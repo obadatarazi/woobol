@@ -36,6 +36,10 @@ class Staging_Sync_Service {
      * @return array{job_id:int, success:int, failed:int, skipped:int, total:int}
      */
     public function sync_approved( int $limit = 25, int $batch_id = 0 ): array {
+        $blocked = $this->blocked_result_when_staging_sync_disabled( max( 0, $limit ) );
+        if ( is_array( $blocked ) ) {
+            return $blocked;
+        }
         $draft_ids = Product_Draft::get_syncable_ids( $limit );
         return $this->sync_draft_ids( $draft_ids, $batch_id );
     }
@@ -49,6 +53,11 @@ class Staging_Sync_Service {
      * @return array{job_id:int, success:int, failed:int, skipped:int, total:int}
      */
     public function sync_selected( array $selected_draft_ids, array $selected_variation_draft_ids = [], int $batch_id = 0 ): array {
+        $selected_total = count( $selected_draft_ids ) + count( $selected_variation_draft_ids );
+        $blocked = $this->blocked_result_when_staging_sync_disabled( $selected_total );
+        if ( is_array( $blocked ) ) {
+            return $blocked;
+        }
         $selected = array_values( array_unique( array_map( 'absint', $selected_draft_ids ) ) );
         $selected_variations = array_values( array_unique( array_map( 'absint', $selected_variation_draft_ids ) ) );
         if ( $selected === [] && $selected_variations === [] ) {
@@ -63,6 +72,29 @@ class Staging_Sync_Service {
         } ) );
 
         return $this->sync_item_ids( $draft_ids, $variation_ids, $batch_id );
+    }
+
+    /**
+     * @return array{job_id:int, success:int, failed:int, skipped:int, total:int}|null
+     */
+    private function blocked_result_when_staging_sync_disabled( int $requested_total = 0 ): ?array {
+        if ( Mapping_Config::staging_sync_enabled() ) {
+            return null;
+        }
+
+        Logger::info(
+            'Staging sync skipped because "Allow staging sync to bol.com" is disabled.',
+            [],
+            'staging'
+        );
+
+        return [
+            'job_id'  => 0,
+            'success' => 0,
+            'failed'  => 0,
+            'skipped' => max( 0, $requested_total ),
+            'total'   => max( 0, $requested_total ),
+        ];
     }
 
     /**
@@ -343,23 +375,21 @@ class Staging_Sync_Service {
             $this->sync_catalog_content( $final_payload, $ean, $push_img, $wc_product_id, $push_name, $push_desc );
         }
 
-        if ( $resolved_offer_id !== '' ) {
-            Product_Mapping::save_row(
-                $wc_product_id,
-                $resolved_offer_id,
-                $ean,
-                '',
-                [
-                    'failed'            => false,
-                    'pending_async'     => $resolution['status'] === 'TIMEOUT',
-                    'message'           => '',
-                    'synced'            => current_time( 'mysql', true ),
-                    'product_name'      => (string) $draft['name'],
-                    'source'            => 'staging',
-                    'process_status_id' => $resolution['process_status_id'] ?? '',
-                ]
-            );
-        }
+        Product_Mapping::save_row(
+            $wc_product_id,
+            $resolved_offer_id,
+            $ean,
+            '',
+            [
+                'failed'            => false,
+                'pending_async'     => $resolution['status'] === 'TIMEOUT' || $resolved_offer_id === '',
+                'message'           => $resolved_offer_id === '' ? 'Offer ID not resolved yet; mapping row saved and will be completed on a later sync.' : '',
+                'synced'            => current_time( 'mysql', true ),
+                'product_name'      => (string) $draft['name'],
+                'source'            => 'staging',
+                'process_status_id' => $resolution['process_status_id'] ?? '',
+            ]
+        );
 
         Product_Draft::update(
             $draft_id,
@@ -655,22 +685,21 @@ class Staging_Sync_Service {
                 $this->sync_catalog_content( $combined, $ean, false, $wc_variation_id, false, false );
             }
 
-            if ( $resolved_offer_id !== '' ) {
-                Product_Mapping::save_row(
-                    $wc_variation_id,
-                    $resolved_offer_id,
-                    $ean,
-                    '',
-                    [
-                        'failed' => false,
-                        'pending_async' => $resolution['status'] === 'TIMEOUT',
-                        'synced' => current_time( 'mysql', true ),
-                        'product_name' => (string) ( $parent_draft['name'] ?? '' ),
-                        'source' => 'staging_variation',
-                        'process_status_id' => $resolution['process_status_id'] ?? '',
-                    ]
-                );
-            }
+            Product_Mapping::save_row(
+                $wc_variation_id,
+                $resolved_offer_id,
+                $ean,
+                '',
+                [
+                    'failed' => false,
+                    'pending_async' => $resolution['status'] === 'TIMEOUT' || $resolved_offer_id === '',
+                    'message' => $resolved_offer_id === '' ? 'Offer ID not resolved yet; mapping row saved and will be completed on a later sync.' : '',
+                    'synced' => current_time( 'mysql', true ),
+                    'product_name' => (string) ( $parent_draft['name'] ?? '' ),
+                    'source' => 'staging_variation',
+                    'process_status_id' => $resolution['process_status_id'] ?? '',
+                ]
+            );
 
             Variation_Draft::update(
                 $variation_id,

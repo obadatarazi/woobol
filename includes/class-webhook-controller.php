@@ -167,13 +167,17 @@ class Webhook_Controller {
     }
 
     private function queue_order_sync(): void {
+        $debounce = Mapping_Config::get_order_sync_interval_seconds();
         if ( get_transient( self::ORDER_SYNC_DEBOUNCE_TRANSIENT ) ) {
+            return;
+        }
+        if ( ! Sync_Scheduler::can_run_order_sync() ) {
             return;
         }
         if ( wp_next_scheduled( 'wbs_cron_sync_orders' ) ) {
             return;
         }
-        set_transient( self::ORDER_SYNC_DEBOUNCE_TRANSIENT, '1', MINUTE_IN_SECONDS );
+        set_transient( self::ORDER_SYNC_DEBOUNCE_TRANSIENT, '1', $debounce );
         wp_schedule_single_event( time() + 2, 'wbs_cron_sync_orders' );
     }
 }

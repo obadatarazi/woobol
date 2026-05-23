@@ -476,6 +476,9 @@ class Staging_Admin {
                 $first_error
             );
         }
+        if ( ! Mapping_Config::staging_sync_enabled() ) {
+            $message .= ' ' . __( 'Staging sync is currently blocked by the "Allow staging sync to bol.com" setting.', 'woo-bol-sync' );
+        }
 
         wp_send_json_success(
             [
