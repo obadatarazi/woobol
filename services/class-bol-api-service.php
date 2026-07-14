@@ -221,7 +221,15 @@ class Bol_API_Service {
      * @return array<string, mixed>|\WP_Error
      */
     public function send_test_subscription_notification( string $subscription_id ) {
-        return $this->request_with_headers( '/subscriptions/test/' . rawurlencode( $subscription_id ), 'POST' );
+        // bol.com expects Content-Type on POST even when the body is empty (see demo SUBSCRIPTIONS spec).
+        return $this->request_with_headers(
+            '/subscriptions/test/' . rawurlencode( $subscription_id ),
+            'POST',
+            [],
+            [],
+            self::API_BASE_URL,
+            true
+        );
     }
 
     /**
@@ -333,7 +341,7 @@ class Bol_API_Service {
      * @param array<string, string> $headers
      * @return array<string, mixed>|\WP_Error
      */
-    public function request_with_headers( string $path, string $method = 'GET', array $body = [], array $headers = [], string $base_url = self::API_BASE_URL ) {
+    public function request_with_headers( string $path, string $method = 'GET', array $body = [], array $headers = [], string $base_url = self::API_BASE_URL, bool $send_empty_json_object = false ) {
         if ( ! $this->has_credentials() ) {
             $this->last_error = __( 'Missing bol.com API credentials.', 'woo-bol-sync' );
             return new \WP_Error( 'wbs_missing_credentials', $this->last_error );
@@ -365,7 +373,7 @@ class Bol_API_Service {
         $url      = $this->build_request_url( $path, $base_url );
         $is_offer = $this->is_offer_endpoint( $route );
         $verb     = strtoupper( $method );
-        $has_body = $body !== [] && ! in_array( $verb, [ 'GET', 'DELETE' ], true );
+        $has_body = ( $body !== [] || $send_empty_json_object ) && ! in_array( $verb, [ 'GET', 'DELETE' ], true );
         $default_headers = $this->default_media_headers( $route, $base_url );
         // Never reuse this variable for response headers — merging response headers into the next
         // request breaks Offer API media-type fallback (and retry attempts).
@@ -416,7 +424,7 @@ class Bol_API_Service {
             }
 
             if ( $has_body ) {
-                $args['body'] = wp_json_encode( $body );
+                $args['body'] = wp_json_encode( $body !== [] ? $body : new \stdClass() );
             }
 
             $response = wp_remote_request( $url, $args );

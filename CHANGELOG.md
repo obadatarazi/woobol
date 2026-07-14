@@ -5,6 +5,36 @@ All notable changes to WooBolSync are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.6] - 2026-07-09
+
+### Fixed
+- Release zip no longer bundles `bol-webshop-order-filter.php` inside `woo-bol-sync/`, which caused WordPress to treat uploads as a different plugin ("Bol vs Webshop Order Filter") instead of updating WooBolSync.
+
+## [3.1.5] - 2026-07-08
+
+### Added
+- **Sendcloud → bol.com tracking bridge**: when a bol.com order gets a tracking number in WooCommerce (order note, shipment-tracking meta, or AST Pro), WooBolSync automatically confirms the shipment on bol.com with `transporterCode` + `trackAndTrace` so the bol customer receives tracking without manual portal work.
+- Carrier name mapping to bol.com transporter codes (PostNL → `TNT`, DHL → `DHLFORYOU`, DPD, Bpost, UPS, etc.).
+- One-time diagnostic log (`Bol Sync → Logs`, context `orders`, level debug) dumping all order meta for a bol-linked order when no tracking could be detected yet — helps pinpoint the exact meta key used by shipping integrations (e.g. Sendcloud's cloud-to-REST-API sync) that don't add order notes.
+
+### Changed
+- bol.com shipment push on order completed/shipped now waits for a tracking number when none is available yet (typical Sendcloud label flow).
+- Order-note tracking parser now requires a shipping-related keyword before scanning a note, and no longer matches arbitrary long digit sequences, to avoid picking up unrelated numbers (payment references, phone numbers) from other notes.
+- Order-note parser now reads the `carrier` and `code` query parameters straight from Sendcloud's own tracking URL (`*.sendcloud.sc/forward?carrier=...&code=...`) as the primary detection method, confirmed against a real Sendcloud "DHL eCommerce" order note; prose-based patterns (e.g. "shipment is: CODE") remain as fallback for notes without a link.
+
+## [3.1.4] - 2026-05-23
+
+### Fixed
+- bol.com subscription test push: send `Content-Type` and `{}` body on `POST /subscriptions/test/{id}` (required by bol API; bodyless POST without media type returned HTTP 400).
+- Wait for async subscription update/create (`202` + `PENDING`) to finish before scheduling the test notification.
+- Surface bol API `detail` text when the test call fails; detect disabled subscriptions on bol.com.
+
+## [3.1.3] - 2026-05-23
+
+### Fixed
+- Webhook subscription setup: resolve the real `subscriptionId` from async create/update process status (`entityId`) instead of storing `processStatusId`, which caused bol.com test push (`POST /subscriptions/test/{id}`) to return HTTP 400 Bad Request.
+- Reconcile subscription ID from the bol API when the stored ID is stale; refresh signature keys before scheduling the test notification.
+
 ## [3.0.24] - 2026-05-09
 
 ### Changed

@@ -4,7 +4,7 @@ Tags: woocommerce, bol.com, sync, integration, marketplace
 Requires at least: 6.2
 Tested up to: 7.0
 Requires PHP: 8.2
-Stable tag: 3.1.2
+Stable tag: 3.1.6
 License: Proprietary
 
 Production-grade WooCommerce ↔ bol.com integration: product sync, order import, signed webhooks, configurable schedules, and DB-backed logging.
@@ -72,6 +72,14 @@ Uninstalling (Plugins → Delete) **removes** all WooBolSync-owned data:
 * All scheduled cron events.
 
 == Changelog ==
+
+= 3.1.6 =
+* Fixed: release zip no longer includes the separate order-filter plugin file, so WordPress in-place update works correctly.
+
+= 3.1.5 =
+* Added: automatic bol.com shipment confirmation when Sendcloud (or AST Pro) adds a tracking number to a bol-imported WooCommerce order — no more manual track & trace entry in the bol seller portal.
+* Added: one-time diagnostic log dump of order meta (Bol Sync → Logs) when a bol order has no detectable tracking yet, to help identify undocumented meta keys used by cloud-based shipping integrations.
+* Changed: completing/shipping a bol order in WooCommerce waits for a tracking number when none is stored yet.
 
 = 3.1.2 =
 * Compatibility: tested up to WordPress 7.0.

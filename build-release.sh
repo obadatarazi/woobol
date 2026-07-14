@@ -19,8 +19,12 @@ rsync -a \
   --exclude='.cursor/' \
   --exclude='.git/' \
   --exclude='.DS_Store' \
+  --exclude='.gitignore' \
   --exclude='build-release.sh' \
+  --exclude='bol-webshop-order-filter.php' \
+  --exclude='*.md' \
   --exclude='*.zip' \
+  --exclude='languages/.gitkeep' \
   "$ROOT/" "$STAGE/"
 
 mkdir -p "$OUT_DIR"

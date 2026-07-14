@@ -79,19 +79,15 @@ class Admin_Menu {
         add_action( 'admin_post_wbs_save_category_map', [ $this, 'save_category_map' ] );
         add_action( 'update_option_wbs_client_id', [ $this, 'on_credentials_option_changed' ], 10, 3 );
         add_action( 'update_option_wbs_client_secret', [ $this, 'on_credentials_option_changed' ], 10, 3 );
-        add_action( 'updated_option', [ $this, 'maybe_reschedule_sync_crons' ], 10, 3 );
+        foreach ( self::SCHEDULE_OPTION_KEYS as $option_key ) {
+            add_action( "update_option_{$option_key}", [ $this, 'reschedule_sync_crons' ] );
+        }
     }
 
     /**
      * Re-queue product/order single events when schedule options change.
-     *
-     * @param mixed $old_value Previous option value.
-     * @param mixed $value     New option value.
      */
-    public function maybe_reschedule_sync_crons( string $option, $old_value, $value ): void {
-        if ( ! in_array( $option, self::SCHEDULE_OPTION_KEYS, true ) ) {
-            return;
-        }
+    public function reschedule_sync_crons(): void {
         Sync_Scheduler::apply_product_schedule();
         Sync_Scheduler::apply_order_schedule();
     }
@@ -1423,8 +1419,8 @@ class Admin_Menu {
         $service = new Subscription_Sync_Service( $this->api );
         $result  = $service->ensure_process_status_subscription();
         if ( ! empty( $result['ok'] ) ) {
-            $test_result = $service->test_configured_subscription();
             $keys_result = $service->refresh_signature_keys();
+            $test_result = $service->test_configured_subscription( $result );
 
             $result['test']           = $test_result;
             $result['signature_keys'] = $keys_result;

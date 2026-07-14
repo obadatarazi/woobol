@@ -16,12 +16,14 @@ defined( 'ABSPATH' ) || exit;
 
 class Order_Sync_Service {
 
-    public const META_BOL_ORDER_ID         = '_wbs_bol_order_id';
-    public const META_BOL_ORDER_ITEMS      = '_wbs_bol_order_items';
-    public const META_BOL_ORDER_RAW        = '_wbs_bol_order_raw';
-    public const META_BOL_PAYMENT_RAW      = '_wbs_bol_payment_raw';
-    public const META_BOL_LAST_PUSH        = '_wbs_bol_last_push';
-    public const META_BOL_LAST_RETURN_SYNC = '_wbs_bol_last_return_sync';
+    public const META_BOL_ORDER_ID                 = '_wbs_bol_order_id';
+    public const META_BOL_ORDER_ITEMS              = '_wbs_bol_order_items';
+    public const META_BOL_ORDER_RAW                = '_wbs_bol_order_raw';
+    public const META_BOL_PAYMENT_RAW              = '_wbs_bol_payment_raw';
+    public const META_BOL_LAST_PUSH                = '_wbs_bol_last_push';
+    public const META_BOL_LAST_RETURN_SYNC         = '_wbs_bol_last_return_sync';
+    public const META_BOL_SHIPMENT_TRACKING_PUSHED = '_wbs_bol_shipment_tracking_pushed';
+    public const META_BOL_TRACKING_DIAGNOSTIC_LOGGED = '_wbs_bol_tracking_diagnostic_logged';
 
     private Bol_API_Service $api;
 
@@ -87,7 +89,25 @@ class Order_Sync_Service {
 
         $status = (string) $order->get_status();
         if ( in_array( $status, [ 'completed', 'shipped' ], true ) ) {
-            $this->push_shipment_for_order( $order, (string) $map['bol_order_id'] );
+            if ( $this->maybe_push_shipment_from_tracking( $order_id ) ) {
+                return;
+            }
+
+            $tracking = $this->extract_tracking_details( $order );
+            if ( empty( $tracking['trackAndTrace'] ) ) {
+                Logger::info(
+                    'bol.com shipment deferred: no tracking number yet (waiting for Sendcloud label or shipment tracking meta).',
+                    [
+                        'wc_order_id'  => $order_id,
+                        'bol_order_id' => (string) $map['bol_order_id'],
+                        'status'       => $status,
+                    ],
+                    'orders'
+                );
+                return;
+            }
+
+            $this->push_shipment_for_order( $order, (string) $map['bol_order_id'], $tracking );
             return;
         }
 
@@ -106,6 +126,92 @@ class Order_Sync_Service {
             ],
             'orders'
         );
+    }
+
+    /**
+     * Push bol.com shipment when WooCommerce has a tracking number (e.g. from Sendcloud).
+     */
+    public function maybe_push_shipment_from_tracking( int $order_id ): bool {
+        $order = wc_get_order( $order_id );
+        if ( ! $order instanceof \WC_Order ) {
+            return false;
+        }
+
+        $map = Order_Mapping::get_by_wc_order_id( $order_id );
+        if ( ! is_array( $map ) || empty( $map['bol_order_id'] ) ) {
+            return false;
+        }
+
+        if ( in_array( (string) $order->get_status(), [ 'cancelled', 'refunded' ], true ) ) {
+            return false;
+        }
+
+        $tracking = $this->extract_tracking_details( $order );
+        if ( empty( $tracking['trackAndTrace'] ) ) {
+            $this->maybe_log_tracking_diagnostic( $order );
+            return false;
+        }
+
+        $fingerprint = $this->build_tracking_fingerprint( $tracking );
+        $previous    = (string) $order->get_meta( self::META_BOL_SHIPMENT_TRACKING_PUSHED, true );
+        if ( $previous === $fingerprint ) {
+            return false;
+        }
+
+        if ( (string) ( $map['status'] ?? '' ) === 'shipped' && $previous === '' ) {
+            Logger::warning(
+                'bol.com order already marked shipped without tracking; add the track & trace code manually in bol.com or contact support.',
+                [
+                    'wc_order_id'  => $order_id,
+                    'bol_order_id' => (string) $map['bol_order_id'],
+                    'tracking'     => $tracking['trackAndTrace'],
+                ],
+                'orders'
+            );
+            return false;
+        }
+
+        $this->push_shipment_for_order( $order, (string) $map['bol_order_id'], $tracking );
+        return (string) $order->get_meta( self::META_BOL_SHIPMENT_TRACKING_PUSHED, true ) === $fingerprint;
+    }
+
+    /**
+     * One-time diagnostic dump for a bol-linked order that has no detectable tracking yet.
+     *
+     * Some shipping integrations (e.g. Sendcloud's newer cloud-to-REST-API sync) write
+     * tracking data to undocumented order meta keys or only change the order status,
+     * without ever adding an order note. This logs every meta key/value once per order
+     * so the exact key used by the shop's integration can be identified from
+     * Bol Sync → Logs and added to {@see collect_tracking_candidates()}.
+     */
+    private function maybe_log_tracking_diagnostic( \WC_Order $order ): void {
+        if ( $order->get_meta( self::META_BOL_TRACKING_DIAGNOSTIC_LOGGED, true ) === 'yes' ) {
+            return;
+        }
+
+        $meta_dump = [];
+        foreach ( $order->get_meta_data() as $meta ) {
+            $data = $meta->get_data();
+            $key  = (string) ( $data['key'] ?? '' );
+            if ( $key === '' ) {
+                continue;
+            }
+            $value             = $data['value'] ?? '';
+            $meta_dump[ $key ] = is_scalar( $value ) ? substr( (string) $value, 0, 200 ) : gettype( $value );
+        }
+
+        Logger::debug(
+            'bol.com order has no detectable tracking yet — full order meta dump for diagnosing the shipping integration (e.g. Sendcloud) key names.',
+            [
+                'wc_order_id' => $order->get_id(),
+                'status'      => $order->get_status(),
+                'order_meta'  => $meta_dump,
+            ],
+            'orders'
+        );
+
+        $order->update_meta_data( self::META_BOL_TRACKING_DIAGNOSTIC_LOGGED, 'yes' );
+        $order->save_meta_data();
     }
 
     /**
@@ -495,7 +601,10 @@ class Order_Sync_Service {
         return trim( $value );
     }
 
-    private function push_shipment_for_order( \WC_Order $order, string $bol_order_id ): void {
+    /**
+     * @param array<string, string>|null $tracking
+     */
+    private function push_shipment_for_order( \WC_Order $order, string $bol_order_id, ?array $tracking = null ): void {
         $order_items = $this->extract_shippable_order_items( $order );
         if ( $order_items === [] ) {
             Order_Mapping::update_status_by_wc_order_id( $order->get_id(), 'failed' );
@@ -503,7 +612,9 @@ class Order_Sync_Service {
             return;
         }
 
-        $tracking = $this->extract_tracking_details( $order );
+        if ( $tracking === null ) {
+            $tracking = $this->extract_tracking_details( $order );
+        }
         $payload  = [
             'orderItems' => $order_items,
             'shipmentReference' => 'wc-' . $order->get_id(),
@@ -537,8 +648,43 @@ class Order_Sync_Service {
         }
 
         $order->update_meta_data( self::META_BOL_LAST_PUSH, current_time( 'mysql', true ) );
+        $has_tracking = ! empty( $tracking['trackAndTrace'] );
+        if ( $has_tracking ) {
+            $order->update_meta_data( self::META_BOL_SHIPMENT_TRACKING_PUSHED, $this->build_tracking_fingerprint( $tracking ) );
+            // Also store under the widely-used WooCommerce tracking meta keys so the
+            // code is visible to other plugins/themes and on repeat lookups, not just
+            // inside the order note text.
+            if ( $order->get_meta( '_tracking_number', true ) === '' ) {
+                $order->update_meta_data( '_tracking_number', (string) $tracking['trackAndTrace'] );
+            }
+            if ( ! empty( $tracking['transporterCode'] ) && $order->get_meta( '_tracking_provider', true ) === '' ) {
+                $order->update_meta_data( '_tracking_provider', (string) $tracking['transporterCode'] );
+            }
+        }
         $order->save();
         Order_Mapping::update_status_by_wc_order_id( $order->get_id(), 'shipped' );
+
+        if ( $has_tracking ) {
+            $order->add_order_note(
+                sprintf(
+                    /* translators: 1: carrier code 2: tracking number */
+                    __( 'bol.com shipment confirmed with tracking (%1$s: %2$s).', 'woo-bol-sync' ),
+                    (string) ( $tracking['transporterCode'] ?? __( 'carrier', 'woo-bol-sync' ) ),
+                    (string) $tracking['trackAndTrace']
+                )
+            );
+        }
+
+        Logger::info(
+            'bol.com shipment pushed.',
+            [
+                'wc_order_id'      => $order->get_id(),
+                'bol_order_id'     => $bol_order_id,
+                'transporter_code' => (string) ( $tracking['transporterCode'] ?? '' ),
+                'track_and_trace'  => (string) ( $tracking['trackAndTrace'] ?? '' ),
+            ],
+            'orders'
+        );
     }
 
     private function push_cancellation_for_order( \WC_Order $order, string $bol_order_id ): void {
@@ -596,18 +742,284 @@ class Order_Sync_Service {
      * @return array<string, string>
      */
     private function extract_tracking_details( \WC_Order $order ): array {
+        foreach ( $this->collect_tracking_candidates( $order ) as $candidate ) {
+            $code = trim( (string) ( $candidate['trackAndTrace'] ?? '' ) );
+            if ( $code === '' ) {
+                continue;
+            }
+
+            $carrier = trim( (string) ( $candidate['transporterCode'] ?? '' ) );
+            if ( $carrier === '' ) {
+                $carrier = $this->guess_bol_transporter_from_tracking( $code, $order );
+                Logger::warning(
+                    'bol.com transporterCode guessed (no carrier name found near the tracking code); verify on bol.com if wrong.',
+                    [ 'wc_order_id' => $order->get_id(), 'guessed_transporter_code' => $carrier, 'track_and_trace' => $code ],
+                    'orders'
+                );
+            } else {
+                $carrier = $this->map_carrier_to_bol_transporter( $carrier, $order );
+            }
+
+            $out = [ 'trackAndTrace' => $code ];
+            if ( $carrier !== '' ) {
+                $out['transporterCode'] = $carrier;
+            }
+
+            return $out;
+        }
+
+        return [];
+    }
+
+    /**
+     * @return array<int, array<string, string>>
+     */
+    private function collect_tracking_candidates( \WC_Order $order ): array {
+        $candidates = [];
+
         $carrier = (string) $order->get_meta( '_tracking_provider', true );
         $code    = (string) $order->get_meta( '_tracking_number', true );
+        if ( $code !== '' ) {
+            $candidates[] = [
+                'transporterCode' => $carrier,
+                'trackAndTrace'   => $code,
+            ];
+        }
 
-        $out = [];
+        foreach ( [ '_sendcloud_tracking_number', '_sendcloud_track_trace', 'sendcloud_tracking_number' ] as $meta_key ) {
+            $meta_code = trim( (string) $order->get_meta( $meta_key, true ) );
+            if ( $meta_code !== '' ) {
+                $candidates[] = [
+                    'transporterCode' => (string) $order->get_meta( '_sendcloud_carrier', true ),
+                    'trackAndTrace'   => $meta_code,
+                ];
+            }
+        }
+
+        $ast_items = $order->get_meta( '_wc_shipment_tracking_items', true );
+        if ( is_array( $ast_items ) ) {
+            foreach ( array_reverse( $ast_items ) as $item ) {
+                if ( ! is_array( $item ) ) {
+                    continue;
+                }
+                $item_code = trim( (string) ( $item['tracking_number'] ?? $item['tracking_id'] ?? '' ) );
+                if ( $item_code === '' ) {
+                    continue;
+                }
+                $candidates[] = [
+                    'transporterCode' => (string) ( $item['tracking_provider'] ?? $item['custom_tracking_provider'] ?? '' ),
+                    'trackAndTrace'   => $item_code,
+                ];
+            }
+        }
+
+        $note_tracking = $this->extract_tracking_from_order_notes( $order );
+        if ( $note_tracking !== [] ) {
+            $candidates[] = $note_tracking;
+        }
+
+        return $candidates;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function extract_tracking_from_order_notes( \WC_Order $order ): array {
+        if ( ! function_exists( 'wc_get_order_notes' ) ) {
+            return [];
+        }
+
+        $notes = wc_get_order_notes(
+            [
+                'order_id' => $order->get_id(),
+                'limit'    => 25,
+                'orderby'  => 'date_created',
+                'order'    => 'DESC',
+                'type'     => '',
+            ]
+        );
+
+        foreach ( $notes as $note ) {
+            $content = '';
+            if ( is_object( $note ) && isset( $note->content ) ) {
+                $content = (string) $note->content;
+            } elseif ( is_array( $note ) ) {
+                $content = (string) ( $note['content'] ?? '' );
+            }
+            if ( $content === '' || ! $this->looks_like_shipping_note( $content ) ) {
+                continue;
+            }
+
+            $parsed = $this->parse_tracking_from_text( $content );
+            if ( $parsed !== [] ) {
+                return $parsed;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Guard against false positives (e.g. payment/refund notes containing long numbers)
+     * by only parsing notes that plausibly describe a shipment.
+     */
+    private function looks_like_shipping_note( string $content ): bool {
+        return (bool) preg_match(
+            '/sendcloud|track\s*(?:&|and)?\s*trace|tracking|t&t|verzend|zending|vervoerder|shipment|shipping label|parcel|carrier|transporter|postnl|dhl|dpd|bpost|ups\b|gls\b|fedex/i',
+            $content
+        );
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function parse_tracking_from_text( string $raw_text ): array {
+        $decoded = html_entity_decode( $raw_text, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+
+        // Primary source: Sendcloud's own tracking link uses the same URL template for
+        // every carrier ("...sendcloud.sc/forward?carrier=X&code=Y..."), so the carrier
+        // and code query parameters can be read directly instead of guessing from prose.
+        // Confirmed against a real note: "The DHL eCommerce Benelux tracking number for
+        // this SendCloud shipment is: JVGL0631... and can be traced at:
+        // https://tracking.eu-central-1-0.sendcloud.sc/forward?carrier=dhl&code=JVGL0631...".
+        $from_url = $this->parse_tracking_from_sendcloud_url( $decoded );
+        if ( $from_url !== [] ) {
+            return $from_url;
+        }
+
+        $text = wp_strip_all_tags( $decoded );
+        if ( $text === '' ) {
+            return [];
+        }
+
+        $carrier = '';
+        if ( preg_match( '/^The\s+([A-Za-z][A-Za-z0-9 \-]{1,40}?)\s+tracking\s+number/i', trim( $text ), $sentence_match ) ) {
+            $carrier = trim( (string) ( $sentence_match[1] ?? '' ) );
+        } elseif ( preg_match( '/(?:carrier|transporter|vervoerder|shipping provider|pakketdienst)\s*:?\s*([A-Za-z][A-Za-z \-]{1,40}?)(?=[\s.,]|$)/i', $text, $carrier_match ) ) {
+            $carrier = trim( (string) ( $carrier_match[1] ?? '' ) );
+        }
+
+        $code = '';
+        if ( preg_match( '/(?:shipment|order|delivery)\s+is\s*:\s*([A-Za-z0-9\-]{6,30})\b/i', $text, $is_match ) ) {
+            // Matches Sendcloud's "...shipment is: <code>" wording even without a link.
+            $code = trim( (string) ( $is_match[1] ?? '' ) );
+        } elseif ( preg_match( '/(?:track\s*(?:&|and)?\s*trace|tracking\s*(?:number|code|#)?|t&t)\s*(?:is)?\s*:?\s*([A-Z0-9][A-Z0-9\-]{7,})\b/i', $text, $code_match ) ) {
+            $code = trim( (string) ( $code_match[1] ?? '' ) );
+        } elseif ( preg_match( '/\b(3S[A-Z0-9]{10,})\b/i', $text, $postnl_match ) ) {
+            $code = strtoupper( (string) ( $postnl_match[1] ?? '' ) );
+            if ( $carrier === '' ) {
+                $carrier = 'PostNL';
+            }
+        }
+
+        // Deliberately no generic "any long digit string" fallback: it produced false
+        // positives on payment references, phone numbers, and invoice numbers in
+        // unrelated order notes. Only well-labelled or clearly-shaped codes are trusted.
+        if ( $code === '' ) {
+            return [];
+        }
+
+        $out = [ 'trackAndTrace' => $code ];
         if ( $carrier !== '' ) {
             $out['transporterCode'] = $carrier;
         }
-        if ( $code !== '' ) {
-            $out['trackAndTrace'] = $code;
+
+        return $out;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function parse_tracking_from_sendcloud_url( string $decoded_content ): array {
+        $url = '';
+        if ( preg_match( '/href=["\']([^"\']*sendcloud\.sc[^"\']*)["\']/i', $decoded_content, $href_match ) ) {
+            $url = (string) ( $href_match[1] ?? '' );
+        } elseif ( preg_match( '#https?://[^\s"\'<>]*sendcloud\.sc/[^\s"\'<>]+#i', $decoded_content, $bare_match ) ) {
+            $url = (string) ( $bare_match[0] ?? '' );
+        }
+
+        if ( $url === '' ) {
+            return [];
+        }
+
+        $query_string = (string) ( wp_parse_url( html_entity_decode( $url, ENT_QUOTES | ENT_HTML5, 'UTF-8' ), PHP_URL_QUERY ) ?? '' );
+        if ( $query_string === '' ) {
+            return [];
+        }
+
+        $query = [];
+        parse_str( $query_string, $query );
+
+        $code    = trim( (string) ( $query['code'] ?? '' ) );
+        $carrier = trim( (string) ( $query['carrier'] ?? '' ) );
+        if ( $code === '' ) {
+            return [];
+        }
+
+        $out = [ 'trackAndTrace' => $code ];
+        if ( $carrier !== '' ) {
+            $out['transporterCode'] = $carrier;
         }
 
         return $out;
+    }
+
+    private function guess_bol_transporter_from_tracking( string $code, \WC_Order $order ): string {
+        if ( preg_match( '/^3S[A-Z0-9]+$/i', $code ) ) {
+            return 'TNT';
+        }
+
+        $country = strtoupper( (string) $order->get_shipping_country() );
+        if ( $country === 'BE' ) {
+            return 'BPOST_BE';
+        }
+
+        return 'TNT';
+    }
+
+    private function map_carrier_to_bol_transporter( string $carrier, \WC_Order $order ): string {
+        $normalized = strtolower( preg_replace( '/[^a-z0-9]+/', '', $carrier ) ?: '' );
+        if ( $normalized === '' ) {
+            return '';
+        }
+
+        $country = strtoupper( (string) $order->get_shipping_country() );
+        $map     = [
+            'postnl'    => 'TNT',
+            'tnt'       => 'TNT',
+            'dhl'       => 'DHLFORYOU',
+            'dhlforyou' => 'DHLFORYOU',
+            'dhlsameday'=> 'DHL-SD',
+            'dpd'       => $country === 'BE' ? 'DPD-BE' : 'DPD-NL',
+            'bpost'     => 'BPOST_BE',
+            'ups'       => 'UPS',
+            'gls'       => 'GLS',
+            'fedex'     => $country === 'BE' ? 'FEDEX_BE' : 'FEDEX_NL',
+        ];
+
+        if ( isset( $map[ $normalized ] ) ) {
+            return $map[ $normalized ];
+        }
+
+        foreach ( $map as $needle => $bol_code ) {
+            if ( str_contains( $normalized, $needle ) ) {
+                return $bol_code;
+            }
+        }
+
+        $upper = strtoupper( preg_replace( '/[^A-Z0-9_\-]/', '', $carrier ) ?: '' );
+        if ( $upper !== '' && preg_match( '/^[A-Z0-9_\-]+$/', $upper ) ) {
+            return $upper;
+        }
+
+        return 'OTHER';
+    }
+
+    /**
+     * @param array<string, string> $tracking
+     */
+    private function build_tracking_fingerprint( array $tracking ): string {
+        return strtolower( trim( (string) ( $tracking['transporterCode'] ?? '' ) ) ) . '|' . trim( (string) ( $tracking['trackAndTrace'] ?? '' ) );
     }
 
     /**

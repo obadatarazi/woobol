@@ -63,6 +63,18 @@ final class Sync_Hooks {
             ( new Order_Sync_Service( $api ) )->sync_wc_order_status( $order_id );
         };
 
+        $sync_tracking = static function ( int $order_id ) use ( $api ): void {
+            if ( $order_id <= 0 || wp_installing() ) {
+                return;
+            }
+            $t = 'wbs_tsync_' . $order_id;
+            if ( get_transient( $t ) ) {
+                return;
+            }
+            set_transient( $t, 1, 10 );
+            ( new Order_Sync_Service( $api ) )->maybe_push_shipment_from_tracking( $order_id );
+        };
+
         add_action(
             'woocommerce_product_set_stock',
             static function ( $product ) use ( $sync ): void {
@@ -121,6 +133,54 @@ final class Sync_Hooks {
             20,
             1
         );
+
+        add_action(
+            'woocommerce_order_note_added',
+            static function ( $comment_id, $order ) use ( $sync_tracking ): void {
+                unset( $comment_id );
+                if ( $order instanceof \WC_Order ) {
+                    $sync_tracking( $order->get_id() );
+                    return;
+                }
+                if ( is_numeric( $order ) ) {
+                    $sync_tracking( (int) $order );
+                }
+            },
+            20,
+            2
+        );
+
+        add_action(
+            'woocommerce_update_order',
+            static function ( int $order_id ) use ( $sync_tracking ): void {
+                $sync_tracking( $order_id );
+            },
+            99,
+            1
+        );
+
+        foreach (
+            [
+                'woocommerce_advanced_shipment_tracking_item_added',
+                'ast_shipment_tracking_item_added',
+                'woocommerce_shipment_tracking_insert_tracking',
+            ] as $tracking_hook
+        ) {
+            add_action(
+                $tracking_hook,
+                static function ( $order_id ) use ( $sync_tracking ): void {
+                    if ( $order_id instanceof \WC_Order ) {
+                        $sync_tracking( $order_id->get_id() );
+                        return;
+                    }
+                    if ( is_numeric( $order_id ) ) {
+                        $sync_tracking( (int) $order_id );
+                    }
+                },
+                20,
+                1
+            );
+        }
 
         // Removed: bol.com Required Product Data meta box on product edit page
         // add_action( 'add_meta_boxes_product', [ self::class, 'register_core_bol_metabox' ] );
